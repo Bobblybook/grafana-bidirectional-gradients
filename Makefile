@@ -196,7 +196,7 @@ PLATFORM=linux/amd64
 
 build-docker-full: ## Build Docker image for development.
 	@echo "build docker container"
-	tar -ch . | \
+	tar -ch --format=gnu . | \
 	docker buildx build - \
 	--platform $(PLATFORM) \
 	--build-arg BINGO=false \
