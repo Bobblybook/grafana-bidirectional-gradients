@@ -1,37 +1,52 @@
-import { PanelBuilders, SceneFlexItem, SceneQueryRunner, SceneTimeRange } from '@grafana/scenes';
-import { DataSourceRef, GraphDrawStyle } from '@grafana/schema';
+import { PanelBuilders, SceneFlexItem, SceneQueryRunner } from '@grafana/scenes';
+import { DataSourceRef, GraphDrawStyle, TooltipDisplayMode } from '@grafana/schema';
 
-const QUERY_A =
-  'sum by(cluster)(grafanacloud_instance_alertmanager_notifications_per_second) - sum by (cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)';
-const QUERY_B = 'sum by(cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)';
+import { INSTANCE_ID, PANEL_STYLES, overrideToFixedColor } from '../../home/Insights';
+import { InsightsMenuButton } from '../InsightsMenuButton';
 
-export function getNotificationsScene(timeRange: SceneTimeRange, datasource: DataSourceRef, panelTitle: string) {
+export function getNotificationsScene(datasource: DataSourceRef, panelTitle: string) {
+  const exprA = INSTANCE_ID
+    ? `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_per_second{stack_id="${INSTANCE_ID}"}) - sum by (cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second{stack_id="${INSTANCE_ID}"})`
+    : `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_per_second) - sum by (cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)`;
+
+  const exprB = INSTANCE_ID
+    ? `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second{stack_id="${INSTANCE_ID}"})`
+    : `sum by(cluster)(grafanacloud_instance_alertmanager_notifications_failed_per_second)`;
+
   const query = new SceneQueryRunner({
     datasource,
     queries: [
       {
         refId: 'A',
-        expr: QUERY_A,
+        expr: exprA,
         range: true,
-        legendFormat: '{{cluster}} - success',
+        legendFormat: 'success',
       },
       {
         refId: 'B',
-        expr: QUERY_B,
+        expr: exprB,
         range: true,
-        legendFormat: '{{cluster}} - failed',
+        legendFormat: 'failed',
       },
     ],
-    $timeRange: timeRange,
   });
 
   return new SceneFlexItem({
-    width: 'calc(50% - 4px)',
-    height: 300,
+    ...PANEL_STYLES,
     body: PanelBuilders.timeseries()
       .setTitle(panelTitle)
+      .setDescription('The number of successful and failed notifications')
       .setData(query)
       .setCustomFieldConfig('drawStyle', GraphDrawStyle.Line)
+      .setOption('tooltip', { mode: TooltipDisplayMode.Multi })
+      .setOverrides((b) =>
+        b
+          .matchFieldsWithName('success')
+          .overrideColor(overrideToFixedColor('success'))
+          .matchFieldsWithName('failed')
+          .overrideColor(overrideToFixedColor('failed'))
+      )
+      .setHeaderActions([new InsightsMenuButton({ panel: panelTitle })])
       .build(),
   });
 }

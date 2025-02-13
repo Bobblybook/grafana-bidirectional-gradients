@@ -24,15 +24,17 @@ import (
 	"github.com/grafana/grafana/pkg/api/dtos"
 	"github.com/grafana/grafana/pkg/api/response"
 	"github.com/grafana/grafana/pkg/api/routing"
+	"github.com/grafana/grafana/pkg/apimachinery/errutil"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/localcache"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/usagestats"
 	"github.com/grafana/grafana/pkg/middleware"
+	"github.com/grafana/grafana/pkg/middleware/requestmeta"
 	"github.com/grafana/grafana/pkg/plugins"
 	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/annotations"
-	"github.com/grafana/grafana/pkg/services/auth/identity"
 	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
 	"github.com/grafana/grafana/pkg/services/dashboards"
 	"github.com/grafana/grafana/pkg/services/datasources"
@@ -53,10 +55,8 @@ import (
 	"github.com/grafana/grafana/pkg/services/pluginsintegration/pluginstore"
 	"github.com/grafana/grafana/pkg/services/query"
 	"github.com/grafana/grafana/pkg/services/secrets"
-	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/util"
-	"github.com/grafana/grafana/pkg/util/errutil"
 	"github.com/grafana/grafana/pkg/web"
 )
 
@@ -97,6 +97,11 @@ func ProvideService(plugCtxProvider *plugincontext.Provider, cfg *setting.Cfg, r
 		},
 		usageStatsService: usageStatsService,
 		orgService:        orgService,
+		keyPrefix:         "gf_live",
+	}
+
+	if cfg.LiveHAPrefix != "" {
+		g.keyPrefix = cfg.LiveHAPrefix + ".gf_live"
 	}
 
 	logger.Debug("GrafanaLive initialization", "ha", g.IsHA())
@@ -105,9 +110,10 @@ func ProvideService(plugCtxProvider *plugincontext.Provider, cfg *setting.Cfg, r
 	// things. For example Node allows to publish messages to channels from server
 	// side with its Publish method.
 	node, err := centrifuge.New(centrifuge.Config{
-		LogHandler:       handleLog,
-		LogLevel:         centrifuge.LogLevelError,
-		MetricsNamespace: "grafana_live",
+		LogHandler:         handleLog,
+		LogLevel:           centrifuge.LogLevelError,
+		MetricsNamespace:   "grafana_live",
+		ClientQueueMaxSize: 4194304, // 4MB
 		// Use reasonably large expiration interval for stream meta key,
 		// much bigger than maximum HistoryLifetime value in Node config.
 		// This way stream meta data will expire, in some cases you may want
@@ -119,57 +125,40 @@ func ProvideService(plugCtxProvider *plugincontext.Provider, cfg *setting.Cfg, r
 	}
 	g.node = node
 
+	redisHealthy := false
 	if g.IsHA() {
 		// Configure HA with Redis. In this case Centrifuge nodes
 		// will be connected over Redis PUB/SUB. Presence will work
 		// globally since kept inside Redis.
-		redisAddress := g.Cfg.LiveHAEngineAddress
-		redisShardConfigs := []centrifuge.RedisShardConfig{
-			{Address: redisAddress},
-		}
-		var redisShards []*centrifuge.RedisShard
-		for _, redisConf := range redisShardConfigs {
-			redisShard, err := centrifuge.NewRedisShard(node, redisConf)
-			if err != nil {
-				return nil, fmt.Errorf("error connecting to Live Redis: %v", err)
-			}
-			redisShards = append(redisShards, redisShard)
-		}
-
-		broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-			Prefix: "gf_live",
-			Shards: redisShards,
-		})
+		err := setupRedisLiveEngine(g, node)
 		if err != nil {
-			return nil, fmt.Errorf("error creating Live Redis broker: %v", err)
+			logger.Error("failed to setup redis live engine: %v", err)
+		} else {
+			redisHealthy = true
 		}
-		node.SetBroker(broker)
-
-		presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
-			Prefix: "gf_live",
-			Shards: redisShards,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("error creating Live Redis presence manager: %v", err)
-		}
-		node.SetPresenceManager(presenceManager)
 	}
 
 	channelLocalPublisher := liveplugin.NewChannelLocalPublisher(node, nil)
 
 	var managedStreamRunner *managedstream.Runner
-	if g.IsHA() {
-		redisClient := redis.NewClient(&redis.Options{
-			Addr: g.Cfg.LiveHAEngineAddress,
+	var redisClient *redis.Client
+	if g.IsHA() && redisHealthy {
+		redisClient = redis.NewClient(&redis.Options{
+			Addr:     g.Cfg.LiveHAEngineAddress,
+			Password: g.Cfg.LiveHAEnginePassword,
 		})
 		cmd := redisClient.Ping(context.Background())
 		if _, err := cmd.Result(); err != nil {
-			return nil, fmt.Errorf("error pinging Redis: %v", err)
+			logger.Error("live engine failed to ping redis, proceeding without live ha, error: %v", err)
+			redisClient = nil
 		}
+	}
+
+	if redisClient != nil {
 		managedStreamRunner = managedstream.NewRunner(
 			g.Publish,
 			channelLocalPublisher,
-			managedstream.NewRedisFrameCache(redisClient),
+			managedstream.NewRedisFrameCache(redisClient, g.keyPrefix),
 		)
 	} else {
 		managedStreamRunner = managedstream.NewRunner(
@@ -280,12 +269,14 @@ func ProvideService(plugCtxProvider *plugincontext.Provider, cfg *setting.Cfg, r
 	originGlobs, _ := setting.GetAllowedOriginGlobs(originPatterns) // error already checked on config load.
 	checkOrigin := getCheckOriginFunc(appURL, originPatterns, originGlobs)
 
+	wsCfg := centrifuge.WebsocketConfig{
+		ReadBufferSize:   1024,
+		WriteBufferSize:  1024,
+		CheckOrigin:      checkOrigin,
+		MessageSizeLimit: cfg.LiveMessageSizeLimit,
+	}
 	// Use a pure websocket transport.
-	wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-		CheckOrigin:     checkOrigin,
-	})
+	wsHandler := centrifuge.NewWebsocketHandler(node, wsCfg)
 
 	pushWSHandler := pushws.NewHandler(g.ManagedStreamRunner, pushws.Config{
 		ReadBufferSize:  1024,
@@ -301,11 +292,10 @@ func ProvideService(plugCtxProvider *plugincontext.Provider, cfg *setting.Cfg, r
 
 	g.websocketHandler = func(ctx *contextmodel.ReqContext) {
 		user := ctx.SignedInUser
-		_, identifier := user.GetNamespacedID()
-
+		id, _ := user.GetInternalID()
 		// Centrifuge expects Credentials in context with a current user ID.
 		cred := &centrifuge.Credentials{
-			UserID: identifier,
+			UserID: strconv.FormatInt(id, 10),
 		}
 		newCtx := centrifuge.SetCredentials(ctx.Req.Context(), cred)
 		newCtx = livecontext.SetContextSignedUser(newCtx, user)
@@ -331,16 +321,56 @@ func ProvideService(plugCtxProvider *plugincontext.Provider, cfg *setting.Cfg, r
 
 	g.RouteRegister.Group("/api/live", func(group routing.RouteRegister) {
 		group.Get("/ws", g.websocketHandler)
-	}, middleware.ReqSignedIn)
+	}, middleware.ReqSignedIn, requestmeta.SetSLOGroup(requestmeta.SLOGroupNone))
 
 	g.RouteRegister.Group("/api/live", func(group routing.RouteRegister) {
 		group.Get("/push/:streamId", g.pushWebsocketHandler)
 		group.Get("/pipeline/push/*", g.pushPipelineWebsocketHandler)
-	}, middleware.ReqOrgAdmin)
+	}, middleware.ReqOrgAdmin, requestmeta.SetSLOGroup(requestmeta.SLOGroupNone))
 
 	g.registerUsageMetrics()
 
 	return g, nil
+}
+
+func setupRedisLiveEngine(g *GrafanaLive, node *centrifuge.Node) error {
+	redisAddress := g.Cfg.LiveHAEngineAddress
+	redisPassword := g.Cfg.LiveHAEnginePassword
+	redisShardConfigs := []centrifuge.RedisShardConfig{
+		{Address: redisAddress, Password: redisPassword},
+	}
+
+	redisShards := make([]*centrifuge.RedisShard, 0, len(redisShardConfigs))
+	for _, redisConf := range redisShardConfigs {
+		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+		if err != nil {
+			return fmt.Errorf("error connecting to Live Redis: %v", err)
+		}
+
+		redisShards = append(redisShards, redisShard)
+	}
+
+	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
+		Prefix: g.keyPrefix,
+		Shards: redisShards,
+	})
+	if err != nil {
+		return fmt.Errorf("error creating Live Redis broker: %v", err)
+	}
+
+	node.SetBroker(broker)
+
+	presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
+		Prefix: g.keyPrefix,
+		Shards: redisShards,
+	})
+	if err != nil {
+		return fmt.Errorf("error creating Live Redis presence manager: %v", err)
+	}
+
+	node.SetPresenceManager(presenceManager)
+
+	return nil
 }
 
 // GrafanaLive manages live real-time connections to Grafana (over WebSocket at this moment).
@@ -361,6 +391,8 @@ type GrafanaLive struct {
 	pluginClient          plugins.Client
 	queryDataService      query.Service
 	orgService            org.Service
+
+	keyPrefix string
 
 	node         *centrifuge.Node
 	surveyCaller *survey.Caller
@@ -395,10 +427,10 @@ type DashboardActivityChannel interface {
 	// gitops workflow that knows if the value was saved to the local database or not
 	// in many cases all direct save requests will fail, but the request should be forwarded
 	// to any gitops observers
-	DashboardSaved(orgID int64, user *user.UserDisplayDTO, message string, dashboard *dashboards.Dashboard, err error) error
+	DashboardSaved(orgID int64, requester identity.Requester, message string, dashboard *dashboards.Dashboard, err error) error
 
 	// Called when a dashboard is deleted
-	DashboardDeleted(orgID int64, user *user.UserDisplayDTO, uid string) error
+	DashboardDeleted(orgID int64, requester identity.Requester, uid string) error
 
 	// Experimental! Indicate is GitOps is active.  This really means
 	// someone is subscribed to the `grafana/dashboards/gitops` channel
@@ -932,8 +964,7 @@ func (g *GrafanaLive) HandleHTTPPublish(ctx *contextmodel.ReqContext) response.R
 		return response.Error(http.StatusBadRequest, "invalid channel ID", nil)
 	}
 
-	namespaceID, userID := ctx.SignedInUser.GetNamespacedID()
-	logger.Debug("Publish API cmd", "namespaceID", namespaceID, "userID", userID, "channel", cmd.Channel)
+	logger.Debug("Publish API cmd", "identity", ctx.SignedInUser.GetID(), "channel", cmd.Channel)
 	user := ctx.SignedInUser
 	channel := cmd.Channel
 
@@ -990,7 +1021,7 @@ func (g *GrafanaLive) HandleHTTPPublish(ctx *contextmodel.ReqContext) response.R
 			return response.Error(http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), nil)
 		}
 	}
-	logger.Debug("Publication successful", "namespaceID", namespaceID, "userID", userID, "channel", cmd.Channel)
+	logger.Debug("Publication successful", "identity", ctx.SignedInUser.GetID(), "channel", cmd.Channel)
 	return response.JSON(http.StatusOK, dtos.LivePublishResponse{})
 }
 
@@ -1024,7 +1055,7 @@ func (g *GrafanaLive) HandleInfoHTTP(ctx *contextmodel.ReqContext) response.Resp
 			"active": g.GrafanaScope.Dashboards.HasGitOpsObserver(ctx.SignedInUser.GetOrgID()),
 		})
 	}
-	return response.JSONStreaming(404, util.DynMap{
+	return response.JSONStreaming(http.StatusNotFound, util.DynMap{
 		"message": "Info is not supported for this channel",
 	})
 }

@@ -27,6 +27,7 @@ composableKinds: DataQuery: {
 			schema: {
 				#AzureMonitorQuery: common.DataQuery & {
 					// Azure subscription containing the resource(s) to be queried.
+					// Also used for template variable queries
 					subscription?: string
 
 					// Subscriptions to be queried via Azure Resource Graph.
@@ -43,17 +44,25 @@ composableKinds: DataQuery: {
 					// @deprecated Legacy template variable support.
 					grafanaTemplateVariableFn?: #GrafanaTemplateVariableQuery
 
-					// Template variables params. These exist for backwards compatiblity with legacy template variables.
+					// Resource group used in template variable queries
 					resourceGroup?: string
-					namespace?:     string
-					resource?:      string
-					region?:        string
+					// Namespace used in template variable queries
+					namespace?: string
+					// Resource used in template variable queries
+					resource?: string
+					// Region used in template variable queries
+					region?: string
+					// Custom namespace used in template variable queries
+					customNamespace?: string
 					// Azure Monitor query type.
 					// queryType: #AzureQueryType
+
+					// Used only for exemplar queries from Prometheus
+					query?: string
 				} @cuetsy(kind="interface") @grafana(TSVeneer="type")
 
 				// Defines the supported queryTypes. GrafanaTemplateVariableFn is deprecated
-				#AzureQueryType: "Azure Monitor" | "Azure Log Analytics" | "Azure Resource Graph" | "Azure Traces" | "Azure Subscriptions" | "Azure Resource Groups" | "Azure Namespaces" | "Azure Resource Names" | "Azure Metric Names" | "Azure Workspaces" | "Azure Regions" | "Grafana Template Variable Function" @cuetsy(kind="enum", memberNames="AzureMonitor|LogAnalytics|AzureResourceGraph|AzureTraces|SubscriptionsQuery|ResourceGroupsQuery|NamespacesQuery|ResourceNamesQuery|MetricNamesQuery|WorkspacesQuery|LocationsQuery|GrafanaTemplateVariableFn")
+				#AzureQueryType: "Azure Monitor" | "Azure Log Analytics" | "Azure Resource Graph" | "Azure Traces" | "Azure Subscriptions" | "Azure Resource Groups" | "Azure Namespaces" | "Azure Resource Names" | "Azure Metric Names" | "Azure Workspaces" | "Azure Regions" | "Grafana Template Variable Function" | "traceql" | "Azure Custom Namespaces" | "Azure Custom Metric Names" @cuetsy(kind="enum", memberNames="AzureMonitor|LogAnalytics|AzureResourceGraph|AzureTraces|SubscriptionsQuery|ResourceGroupsQuery|NamespacesQuery|ResourceNamesQuery|MetricNamesQuery|WorkspacesQuery|LocationsQuery|GrafanaTemplateVariableFn|TraceExemplar|CustomNamespacesQuery|CustomMetricNamesQuery")
 
 				#AzureMetricQuery: {
 					// Array of resource URIs to be queried.
@@ -111,13 +120,19 @@ composableKinds: DataQuery: {
 					resultFormat?: #ResultFormat
 					// Array of resource URIs to be queried.
 					resources?: [...string]
-					// If set to true the intersection of time ranges specified in the query and Grafana will be used. Otherwise the query time ranges will be used. Defaults to false
-					intersectTime?: bool
-					// Workspace ID. This was removed in Grafana 8, but remains for backwards compat
+					// If set to true the dashboard time range will be used as a filter for the query. Otherwise the query time ranges will be used. Defaults to false.
+					dashboardTime?: bool
+					// If dashboardTime is set to true this value dictates which column the time filter will be applied to. Defaults to the first tables timeSpan column, the first datetime column found, or TimeGenerated
+					timeColumn?: string
+					// If set to true the query will be run as a basic logs query
+					basicLogsQuery?: bool
+					// Workspace ID. This was removed in Grafana 8, but remains for backwards compat.
 					workspace?: string
 
 					// @deprecated Use resources instead 
 					resource?: string
+					// @deprecated Use dashboardTime instead
+					intersectTime?: bool
 				} @cuetsy(kind="interface")
 
 				// Application Insights Traces sub-query properties
@@ -145,7 +160,7 @@ composableKinds: DataQuery: {
 					filters: [...string]
 				} @cuetsy(kind="interface")
 
-				#ResultFormat: "table" | "time_series" | "trace" @cuetsy(kind="enum", memberNames="Table|TimeSeries|Trace")
+				#ResultFormat: "table" | "time_series" | "trace" | "logs" @cuetsy(kind="enum", memberNames="Table|TimeSeries|Trace|Logs")
 
 				#AzureResourceGraphQuery: {
 					// Azure Resource Graph KQL query to be executed.

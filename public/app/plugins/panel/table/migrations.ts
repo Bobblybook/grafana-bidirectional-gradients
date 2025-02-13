@@ -21,7 +21,7 @@ import { Options } from './panelcfg.gen';
  */
 export const tableMigrationHandler = (panel: PanelModel<Options>): Partial<Options> => {
   // Table was saved as an angular table, lets just swap to the 'table-old' panel
-  if (!panel.pluginVersion && (panel as any).columns) {
+  if (!panel.pluginVersion && 'columns' in panel) {
     console.log('Was angular table', panel);
   }
 
@@ -75,7 +75,7 @@ const generateThresholds = (thresholds: string[], colors: string[]) => {
 };
 
 const migrateTransformations = (
-  panel: PanelModel<Partial<Options>> | any,
+  panel: PanelModel<Partial<Options>>,
   oldOpts: { columns: any; transform: Transformations }
 ) => {
   const transformations: Transformation[] = panel.transformations ?? [];
@@ -147,6 +147,13 @@ const migrateTableStyleToOverride = (style: Style) => {
     override.properties.push({
       id: 'unit',
       value: `time: ${style.dateFormat}`,
+    });
+  }
+
+  if (style.type === 'hidden') {
+    override.properties.push({
+      id: 'custom.hidden',
+      value: true,
     });
   }
 
@@ -230,7 +237,7 @@ const migrateDefaults = (prevDefaults: Style) => {
  * This is called when the panel changes from another panel
  */
 export const tablePanelChangedHandler = (
-  panel: PanelModel<Partial<Options>> | any,
+  panel: PanelModel<Partial<Options>>,
   prevPluginId: string,
   prevOptions: any
 ) => {

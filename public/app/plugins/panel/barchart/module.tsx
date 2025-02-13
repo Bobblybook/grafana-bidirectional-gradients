@@ -3,24 +3,24 @@ import {
   FieldColorModeId,
   FieldConfigProperty,
   FieldType,
-  getFieldDisplayName,
   identityOverrideProcessor,
   PanelPlugin,
   VizOrientation,
 } from '@grafana/data';
-import { config } from '@grafana/runtime';
-import { GraphTransform, GraphTresholdsStyleMode, StackingMode, VisibilityMode } from '@grafana/schema';
+import { GraphTransform, GraphThresholdsStyleMode, StackingMode, VisibilityMode } from '@grafana/schema';
 import { graphFieldOptions, commonOptionsBuilder } from '@grafana/ui';
+import { optsWithHideZeros } from '@grafana/ui/src/options/builder/tooltip';
 
 import { ThresholdsStyleEditor } from '../timeseries/ThresholdsStyleEditor';
 
 import { BarChartPanel } from './BarChartPanel';
 import { TickSpacingEditor } from './TickSpacingEditor';
+import { changeToBarChartPanelMigrationHandler } from './migrations';
 import { FieldConfig, Options, defaultFieldConfig, defaultOptions } from './panelcfg.gen';
 import { BarChartSuggestionsSupplier } from './suggestions';
-import { prepareBarChartDisplayValues } from './utils';
 
 export const plugin = new PanelPlugin<Options, FieldConfig>(BarChartPanel)
+  .setPanelChangeHandler(changeToBarChartPanelMigrationHandler)
   .useFieldConfig({
     standardOptions: {
       [FieldConfigProperty.Color]: {
@@ -31,6 +31,14 @@ export const plugin = new PanelPlugin<Options, FieldConfig>(BarChartPanel)
         defaultValue: {
           mode: FieldColorModeId.PaletteClassic,
         },
+      },
+      [FieldConfigProperty.Links]: {
+        settings: {
+          showOneClick: true,
+        },
+      },
+      [FieldConfigProperty.Actions]: {
+        hideFromDefaults: false,
       },
     },
     useCustomConfig: (builder) => {
@@ -93,7 +101,7 @@ export const plugin = new PanelPlugin<Options, FieldConfig>(BarChartPanel)
         path: 'thresholdsStyle',
         name: 'Show thresholds',
         category: ['Thresholds'],
-        defaultValue: { mode: GraphTresholdsStyleMode.Off },
+        defaultValue: { mode: GraphThresholdsStyleMode.Off },
         settings: {
           options: graphFieldOptions.thresholdsDisplayModes,
         },
@@ -103,25 +111,17 @@ export const plugin = new PanelPlugin<Options, FieldConfig>(BarChartPanel)
         shouldApply: () => true,
       });
 
-      commonOptionsBuilder.addAxisConfig(builder, cfg, false);
+      commonOptionsBuilder.addAxisConfig(builder, cfg);
       commonOptionsBuilder.addHideFrom(builder);
     },
   })
-  .setPanelOptions((builder, context) => {
-    const disp = prepareBarChartDisplayValues(context.data, config.theme2, context.options ?? ({} as Options));
-    let xaxisPlaceholder = 'First string or time field';
-    const viz = 'viz' in disp ? disp.viz[0] : undefined;
-    if (viz?.fields?.length) {
-      const first = viz.fields[0];
-      xaxisPlaceholder += ` (${getFieldDisplayName(first, viz)})`;
-    }
-
+  .setPanelOptions((builder) => {
     builder
       .addFieldNamePicker({
         path: 'xField',
         name: 'X Axis',
         settings: {
-          placeholderText: xaxisPlaceholder,
+          placeholderText: 'First string or time field',
         },
       })
       .addRadio({
@@ -225,6 +225,7 @@ export const plugin = new PanelPlugin<Options, FieldConfig>(BarChartPanel)
         path: 'fullHighlight',
         name: 'Highlight full area on hover',
         defaultValue: defaultOptions.fullHighlight,
+        showIf: (c) => c.stacking === StackingMode.None,
       });
 
     builder.addFieldNamePicker({
@@ -233,10 +234,7 @@ export const plugin = new PanelPlugin<Options, FieldConfig>(BarChartPanel)
       description: 'Use the color value for a sibling field to color each bar value.',
     });
 
-    if (!context.options?.fullHighlight || context.options?.stacking === StackingMode.None) {
-      commonOptionsBuilder.addTooltipOptions(builder);
-    }
-
+    commonOptionsBuilder.addTooltipOptions(builder, false, false, optsWithHideZeros);
     commonOptionsBuilder.addLegendOptions(builder);
     commonOptionsBuilder.addTextSizeOptions(builder, false);
   })

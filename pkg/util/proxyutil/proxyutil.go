@@ -7,11 +7,16 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/grafana/grafana/pkg/services/auth/identity"
+	claims "github.com/grafana/authlib/types"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 )
 
-// UserHeaderName name of the header used when forwarding the Grafana user login.
-const UserHeaderName = "X-Grafana-User"
+const (
+	// UserHeaderName name of the header used when forwarding the Grafana user login.
+	UserHeaderName = "X-Grafana-User"
+	// IDHeaderName name of the header used when forwarding singed id token of the user
+	IDHeaderName = "X-Grafana-Id"
+)
 
 // PrepareProxyRequest prepares a request for being proxied.
 // Removes X-Forwarded-Host, X-Forwarded-Port, X-Forwarded-Proto, Origin, Referer headers.
@@ -110,9 +115,17 @@ func ApplyUserHeader(sendUserHeader bool, req *http.Request, user identity.Reque
 		return
 	}
 
-	namespace, _ := user.GetNamespacedID()
-	switch namespace {
-	case identity.NamespaceUser, identity.NamespaceServiceAccount:
+	if user.IsIdentityType(claims.TypeUser) {
 		req.Header.Set(UserHeaderName, user.GetLogin())
+	}
+}
+
+func ApplyForwardIDHeader(req *http.Request, user identity.Requester) {
+	if user == nil || user.IsNil() {
+		return
+	}
+
+	if token := user.GetIDToken(); token != "" {
+		req.Header.Set(IDHeaderName, token)
 	}
 }

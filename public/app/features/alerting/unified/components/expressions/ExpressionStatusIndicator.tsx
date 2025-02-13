@@ -1,65 +1,55 @@
 import { css } from '@emotion/css';
-import React from 'react';
+import { useFormContext } from 'react-hook-form';
 
 import { GrafanaTheme2 } from '@grafana/data';
 import { Badge, clearButtonStyles, useStyles2 } from '@grafana/ui';
 
+import { RuleFormValues } from '../../types/rule-form';
+import { isGrafanaRecordingRuleByType } from '../../utils/rules';
+
 interface AlertConditionProps {
-  warning?: Error;
-  error?: Error;
   isCondition?: boolean;
   onSetCondition?: () => void;
+  refId?: string;
 }
 
-export const ExpressionStatusIndicator = ({ error, warning, isCondition, onSetCondition }: AlertConditionProps) => {
+export const ExpressionStatusIndicator = ({ isCondition, onSetCondition, refId }: AlertConditionProps) => {
   const styles = useStyles2(getStyles);
+  const { watch } = useFormContext<RuleFormValues>();
+  const type = watch('type');
+  const isGrafanaRecordingRule = type ? isGrafanaRecordingRuleByType(type) : false;
+  const conditionText = isGrafanaRecordingRule ? 'Recording rule output' : 'Alert condition';
 
-  const elements: JSX.Element[] = [];
-
-  if (error && isCondition) {
-    return <Badge color="red" icon="exclamation-circle" text="Alert condition" tooltip={error.message} />;
-  } else if (error) {
-    elements.push(<Badge key="error" color="red" icon="exclamation-circle" text="Error" tooltip={error.message} />);
-  }
-
-  if (warning && isCondition) {
-    return <Badge color="orange" icon="exclamation-triangle" text="Alert condition" tooltip={warning.message} />;
-  } else if (warning) {
-    elements.push(
-      <Badge key="warning" color="orange" icon="exclamation-triangle" text="Warning" tooltip={warning.message} />
-    );
-  }
+  const setAsConditionText = refId ? `Set "${refId}" as alert condition` : 'Set as alert condition';
+  const makeConditionText = isGrafanaRecordingRule ? 'Set as recording rule output' : setAsConditionText;
 
   if (isCondition) {
-    elements.unshift(<Badge key="condition" color="green" icon="check" text="Alert condition" />);
+    return <Badge key="condition" color="green" icon="check" text={conditionText} />;
   } else {
-    elements.unshift(
+    return (
       <button
         key="make-condition"
         type="button"
         className={styles.actionLink}
         onClick={() => onSetCondition && onSetCondition()}
       >
-        Set as alert condition
+        {makeConditionText}
       </button>
     );
   }
-
-  return <>{elements}</>;
 };
 
 const getStyles = (theme: GrafanaTheme2) => {
   const clearButton = clearButtonStyles(theme);
 
   return {
-    actionLink: css`
-      ${clearButton};
-      color: ${theme.colors.text.link};
-      cursor: pointer;
+    actionLink: css(clearButton, {
+      color: theme.colors.text.link,
+      cursor: 'pointer',
 
-      &:hover {
-        text-decoration: underline;
-      }
-    `,
+      '&:hover': {
+        textDecoration: 'underline',
+      },
+    }),
   };
 };

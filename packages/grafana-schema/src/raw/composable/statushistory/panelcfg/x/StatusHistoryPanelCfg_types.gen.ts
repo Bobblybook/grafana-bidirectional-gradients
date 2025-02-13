@@ -4,20 +4,23 @@
 //     public/app/plugins/gen.go
 // Using jennies:
 //     TSTypesJenny
-//     LatestMajorsOrXJenny
-//     PluginEachMajorJenny
+//     PluginTsTypesJenny
 //
 // Run 'make gen-cue' from repository root to regenerate.
 
 import * as ui from '@grafana/schema';
 
-export const pluginVersion = "10.2.0-pre";
+export const pluginVersion = "11.6.0-pre";
 
 export interface Options extends ui.OptionsWithLegend, ui.OptionsWithTooltip, ui.OptionsWithTimezones {
   /**
    * Controls the column width
    */
   colWidth?: number;
+  /**
+   * Enables pagination when > 0
+   */
+  perPage?: number;
   /**
    * Set the height of the rows
    */
@@ -30,11 +33,12 @@ export interface Options extends ui.OptionsWithLegend, ui.OptionsWithTooltip, ui
 
 export const defaultOptions: Partial<Options> = {
   colWidth: 0.9,
+  perPage: 20,
   rowHeight: 0.9,
   showValue: ui.VisibilityMode.Auto,
 };
 
-export interface FieldConfig extends ui.HideableFieldConfig {
+export interface FieldConfig extends ui.AxisConfig, ui.HideableFieldConfig {
   fillOpacity?: number;
   lineWidth?: number;
 }

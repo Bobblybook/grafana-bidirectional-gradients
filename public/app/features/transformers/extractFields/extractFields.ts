@@ -7,8 +7,10 @@ import {
   Field,
   FieldType,
   getFieldTypeFromValue,
+  getUniqueFieldName,
   SynchronousDataTransformerInfo,
 } from '@grafana/data';
+import { config } from '@grafana/runtime';
 import { findField } from 'app/features/dimensions';
 
 import { fieldExtractors } from './fieldExtractors';
@@ -18,7 +20,9 @@ export const extractFieldsTransformer: SynchronousDataTransformerInfo<ExtractFie
   id: DataTransformerID.extractFields,
   name: 'Extract fields',
   description: 'Parse fields from the contends of another',
-  defaultOptions: {},
+  defaultOptions: {
+    delimiter: ',',
+  },
 
   operator: (options, ctx) => (source) =>
     source.pipe(map((data) => extractFieldsTransformer.transformer(options, ctx)(data))),
@@ -30,7 +34,7 @@ export const extractFieldsTransformer: SynchronousDataTransformerInfo<ExtractFie
   },
 };
 
-function addExtractedFields(frame: DataFrame, options: ExtractFieldsOptions): DataFrame {
+export function addExtractedFields(frame: DataFrame, options: ExtractFieldsOptions): DataFrame {
   if (!options.source) {
     return frame;
   }
@@ -50,13 +54,14 @@ function addExtractedFields(frame: DataFrame, options: ExtractFieldsOptions): Da
   const count = frame.length;
   const names: string[] = []; // keep order
   const values = new Map<string, any[]>();
+  const parse = ext.getParser(options);
 
   for (let i = 0; i < count; i++) {
     let obj = source.values[i];
 
     if (isString(obj)) {
       try {
-        obj = ext.parse(obj);
+        obj = parse(obj);
       } catch {
         obj = {}; // empty
       }
@@ -84,7 +89,7 @@ function addExtractedFields(frame: DataFrame, options: ExtractFieldsOptions): Da
     for (const [key, val] of Object.entries(obj)) {
       let buffer = values.get(key);
       if (buffer == null) {
-        buffer = new Array(count);
+        buffer = new Array(count).fill(undefined);
         values.set(key, buffer);
         names.push(key);
       }
@@ -94,12 +99,16 @@ function addExtractedFields(frame: DataFrame, options: ExtractFieldsOptions): Da
 
   const fields = names.map((name) => {
     const buffer = values.get(name);
-    return {
+    const field = {
       name,
       values: buffer,
       type: buffer ? getFieldTypeFromValue(buffer.find((v) => v != null)) : FieldType.other,
       config: {},
     } as Field;
+    if (config.featureToggles.extractFieldsNameDeduplication) {
+      field.name = getUniqueFieldName(field, frame);
+    }
+    return field;
   });
 
   if (options.keepTime) {

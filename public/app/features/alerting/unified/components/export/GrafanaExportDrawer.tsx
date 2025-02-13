@@ -1,34 +1,46 @@
-import React from 'react';
+import * as React from 'react';
 
 import { Drawer } from '@grafana/ui';
+import { t } from 'app/core/internationalization';
 
 import { RuleInspectorTabs } from '../rule-editor/RuleInspector';
 
-import { grafanaRuleExportProviders, RuleExportFormats } from './providers';
-
-const grafanaRulesTabs = Object.values(grafanaRuleExportProviders).map((provider) => ({
-  label: provider.name,
-  value: provider.exportFormat,
-}));
+import { ExportFormats, ExportProvider } from './providers';
 
 interface GrafanaExportDrawerProps {
-  activeTab: RuleExportFormats;
-  onTabChange: (tab: RuleExportFormats) => void;
+  activeTab: ExportFormats;
+  onTabChange: (tab: ExportFormats) => void;
   children: React.ReactNode;
   onClose: () => void;
+  formatProviders: Array<ExportProvider<ExportFormats>>;
+  title?: string;
 }
 
-export function GrafanaExportDrawer({ activeTab, onTabChange, children, onClose }: GrafanaExportDrawerProps) {
+export function GrafanaExportDrawer({
+  activeTab,
+  onTabChange,
+  children,
+  onClose,
+  formatProviders,
+  title = 'Export',
+}: GrafanaExportDrawerProps) {
+  const grafanaRulesTabs = Object.values(formatProviders).map((provider) => ({
+    label: provider.name,
+    value: provider.exportFormat,
+  }));
+  const subtitle =
+    formatProviders.length > 1
+      ? t(
+          'alerting.export.subtitle.formats',
+          'Select the format and download the file or copy the contents to clipboard'
+        )
+      : t('alerting.export.subtitle.one-format', 'Download the file or copy the contents to clipboard');
   return (
     <Drawer
-      title="Export"
-      subtitle="Select the format and download the file or copy the contents to clipboard"
+      title={title}
+      subtitle={subtitle}
       tabs={
-        <RuleInspectorTabs<RuleExportFormats>
-          tabs={grafanaRulesTabs}
-          setActiveTab={onTabChange}
-          activeTab={activeTab}
-        />
+        <RuleInspectorTabs<ExportFormats> tabs={grafanaRulesTabs} setActiveTab={onTabChange} activeTab={activeTab} />
       }
       onClose={onClose}
       size="md"

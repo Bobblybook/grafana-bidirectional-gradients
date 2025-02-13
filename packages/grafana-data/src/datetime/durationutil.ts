@@ -1,8 +1,6 @@
-import { Duration, Interval, isAfter } from 'date-fns';
-import add from 'date-fns/add';
-import intervalToDuration from 'date-fns/intervalToDuration';
+import { add, Duration, intervalToDuration, Interval, isAfter } from 'date-fns';
 
-const durationMap: { [key in Required<keyof Duration>]: string[] } = {
+const durationMap: Record<string, string[]> = {
   years: ['y', 'Y', 'years'],
   months: ['M', 'months'],
   weeks: ['w', 'W', 'weeks'],
@@ -10,7 +8,7 @@ const durationMap: { [key in Required<keyof Duration>]: string[] } = {
   hours: ['h', 'H', 'hours'],
   minutes: ['m', 'minutes'],
   seconds: ['s', 'S', 'seconds'],
-};
+} satisfies { [key in keyof Duration]: string[] };
 
 /**
  * intervalToAbbreviatedDurationString converts interval to readable duration string
@@ -28,7 +26,7 @@ export function intervalToAbbreviatedDurationString(interval: Interval, includeS
   }
 
   const duration = intervalToDuration(interval);
-  return (Object.entries(duration) as Array<[keyof Duration, number | undefined]>).reduce((str, [unit, value]) => {
+  return Object.entries(duration).reduce((str, [unit, value]) => {
     if (value && value !== 0 && !(unit === 'seconds' && !includeSeconds && str)) {
       const padding = str !== '' ? ' ' : '';
       return str + `${padding}${value}${durationMap[unit][0]}`;

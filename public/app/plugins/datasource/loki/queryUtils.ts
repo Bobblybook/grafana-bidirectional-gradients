@@ -18,71 +18,96 @@ import {
   Matcher,
   Identifier,
   Range,
-  formatLokiQuery,
+  Logfmt,
+  Json,
+  OrFilter,
+  FilterOp,
+  RangeOp,
+  VectorOp,
+  BinOpExpr,
 } from '@grafana/lezer-logql';
-import { reportInteraction } from '@grafana/runtime';
 import { DataQuery } from '@grafana/schema';
 
-import { ErrorId, replaceVariables, returnVariables } from '../prometheus/querybuilder/shared/parsingUtils';
-
-import { placeHolderScopedVars } from './components/monaco-query-field/monaco-completion-provider/validation';
-import { LokiDatasource } from './datasource';
-import { getStreamSelectorPositions, NodePosition } from './modifyQuery';
-import { LokiQuery, LokiQueryType } from './types';
-
-export function formatQuery(selector: string | undefined): string {
-  return `${selector || ''}`.trim();
-}
+import { addDropToQuery, addLabelToQuery, getStreamSelectorPositions, NodePosition } from './modifyQuery';
+import { ErrorId } from './querybuilder/parsingUtils';
+import { LabelType, LokiQuery, LokiQueryDirection, LokiQueryType } from './types';
 
 /**
  * Returns search terms from a LogQL query.
- * E.g., `{} |= foo |=bar != baz` returns `['foo', 'bar']`.
+ * E.g., `{} |= "foo" |= "bar" != "baz"` returns `['foo', 'bar']`.
  */
-export function getHighlighterExpressionsFromQuery(input: string): string[] {
-  const results = [];
+export function getHighlighterExpressionsFromQuery(input = ''): string[] {
+  const results: string[] = [];
 
   const filters = getNodesFromQuery(input, [LineFilter]);
 
-  for (let filter of filters) {
+  for (const filter of filters) {
     const pipeExact = filter.getChild(Filter)?.getChild(PipeExact);
     const pipeMatch = filter.getChild(Filter)?.getChild(PipeMatch);
-    const string = filter.getChild(String);
+    const strings = getStringsFromLineFilter(filter);
 
-    if ((!pipeExact && !pipeMatch) || !string) {
+    if ((!pipeExact && !pipeMatch) || !strings.length) {
       continue;
     }
 
-    const filterTerm = input.substring(string.from, string.to).trim();
-    const backtickedTerm = filterTerm[0] === '`';
-    const unwrappedFilterTerm = filterTerm.substring(1, filterTerm.length - 1);
+    for (const string of strings) {
+      const filterTerm = input.substring(string.from, string.to).trim();
+      const backtickedTerm = filterTerm[0] === '`';
+      const unwrappedFilterTerm = filterTerm.substring(1, filterTerm.length - 1);
 
-    if (!unwrappedFilterTerm) {
-      continue;
-    }
+      if (!unwrappedFilterTerm) {
+        continue;
+      }
 
-    let resultTerm = '';
+      let resultTerm = '';
 
-    // Only filter expressions with |~ operator are treated as regular expressions
-    if (pipeMatch) {
-      // When using backticks, Loki doesn't require to escape special characters and we can just push regular expression to highlights array
-      // When using quotes, we have extra backslash escaping and we need to replace \\ with \
-      resultTerm = backtickedTerm ? unwrappedFilterTerm : unwrappedFilterTerm.replace(/\\\\/g, '\\');
-    } else {
-      // We need to escape this string so it is not matched as regular expression
-      resultTerm = escapeRegExp(unwrappedFilterTerm);
-    }
+      // Only filter expressions with |~ operator are treated as regular expressions
+      if (pipeMatch) {
+        // When using backticks, Loki doesn't require to escape special characters and we can just push regular expression to highlights array
+        // When using quotes, we have extra backslash escaping and we need to replace \\ with \
+        resultTerm = backtickedTerm ? unwrappedFilterTerm : unwrappedFilterTerm.replace(/\\\\/g, '\\');
+      } else {
+        // We need to escape this string so it is not matched as regular expression
+        resultTerm = escapeRegExp(unwrappedFilterTerm);
+      }
 
-    if (resultTerm) {
-      results.push(resultTerm);
+      if (resultTerm) {
+        results.push(resultTerm);
+      }
     }
   }
   return results;
 }
 
+export function getExpressionFromExecutedQuery(executedQueryString: string) {
+  return executedQueryString.replace('Expr: ', '');
+}
+
+export function getStringsFromLineFilter(filter: SyntaxNode): SyntaxNode[] {
+  const nodes: SyntaxNode[] = [];
+  let node: SyntaxNode | null = filter;
+  do {
+    const string = node.getChild(String);
+    if (string && !node.getChild(FilterOp)) {
+      nodes.push(string);
+    }
+    node = node.getChild(OrFilter);
+  } while (node != null);
+
+  return nodes;
+}
+
 export function getNormalizedLokiQuery(query: LokiQuery): LokiQuery {
-  const queryType = getLokiQueryType(query);
+  let queryType = getLokiQueryType(query);
   // instant and range are deprecated, we want to remove them
   const { instant, range, ...rest } = query;
+
+  // if `query.expr` is not parsable this might throw an error
+  try {
+    if (isLogsQuery(query.expr) && queryType === LokiQueryType.Instant) {
+      queryType = LokiQueryType.Range;
+    }
+  } catch (e) {}
   return { ...rest, queryType };
 }
 
@@ -180,7 +205,7 @@ export function getNodeFromQuery(query: string, nodeType: number): SyntaxNode | 
 }
 
 /**
- * Parses the query and looks for error nodes. If there is at least one, it returns false.
+ * Parses the query and looks for error nodes. If there is at least one, it returns true.
  * Grafana variables are considered errors, so if you need to validate a query
  * with variables you should interpolate it first.
  */
@@ -189,17 +214,18 @@ export function isQueryWithError(query: string): boolean {
 }
 
 export function isLogsQuery(query: string): boolean {
-  return !isQueryWithNode(query, MetricExpr);
+  // As a safeguard we are checking for a length of 2, because at least the query should be `{}`
+  return query.trim().length > 2 && !isQueryWithNode(query, MetricExpr);
 }
 
 export function isQueryWithParser(query: string): { queryWithParser: boolean; parserCount: number } {
-  const nodes = getNodesFromQuery(query, [LabelParser, JsonExpressionParser]);
+  const nodes = getNodesFromQuery(query, [LabelParser, JsonExpressionParser, Logfmt]);
   const parserCount = nodes.length;
   return { queryWithParser: parserCount > 0, parserCount };
 }
 
 export function getParserFromQuery(query: string): string | undefined {
-  const parsers = getNodesFromQuery(query, [LabelParser, JsonExpressionParser]);
+  const parsers = getNodesFromQuery(query, [LabelParser, Json, Logfmt]);
   return parsers.length > 0 ? query.substring(parsers[0].from, parsers[0].to).trim() : undefined;
 }
 
@@ -229,7 +255,7 @@ export function getLogQueryFromMetricsQuery(query: string): string {
   // Log query in metrics query composes of Selector & PipelineExpr
   const selectorNode = getNodeFromQuery(query, Selector);
   if (!selectorNode) {
-    return query;
+    return '';
   }
   const selector = query.substring(selectorNode.from, selectorNode.to);
 
@@ -237,6 +263,20 @@ export function getLogQueryFromMetricsQuery(query: string): string {
   const pipelineExpr = pipelineExprNode ? query.substring(pipelineExprNode.from, pipelineExprNode.to) : '';
 
   return `${selector} ${pipelineExpr}`.trim();
+}
+
+export function getLogQueryFromMetricsQueryAtPosition(query: string, position: number): string {
+  if (isLogsQuery(query)) {
+    return query;
+  }
+
+  const metricQuery = getNodesFromQuery(query, [MetricExpr])
+    .reverse() // So we don't get the root metric node
+    .find((node) => node.from <= position && node.to >= position);
+  if (!metricQuery) {
+    return '';
+  }
+  return getLogQueryFromMetricsQuery(query.substring(metricQuery.from, metricQuery.to));
 }
 
 export function isQueryWithLabelFilter(query: string): boolean {
@@ -276,13 +316,68 @@ export function requestSupportsSplitting(allQueries: LokiQuery[]) {
   return queries.length > 0;
 }
 
+export function requestSupportsSharding(allQueries: LokiQuery[]) {
+  const queries = allQueries
+    .filter((query) => !query.hide)
+    .filter((query) => query.queryType !== LokiQueryType.Instant)
+    .filter((query) => !query.refId.includes('do-not-shard'))
+    .filter((query) => query.expr)
+    .filter(
+      (query) =>
+        (query.direction === LokiQueryDirection.Scan && isLogsQuery(query.expr)) || metricSupportsSharding(query.expr)
+    );
+
+  return queries.length > 0;
+}
+
+function metricSupportsSharding(query: string) {
+  if (isLogsQuery(query)) {
+    return false;
+  }
+  query = query.trim().toLowerCase();
+
+  const disallowed = getNodesFromQuery(query, [BinOpExpr]);
+  if (disallowed.length > 0) {
+    return false;
+  }
+
+  /**
+   * If there are VectorAggregationExpr, we want to make sure that the leftmost VectorOp is sum, meaning that
+   * it's wrapped in a sum. E.g.
+   * Disallowed: avg(sum by (level) (avg_over_time({place="luna"}[1m])))
+   * Allowed: sum(sum by (level) (avg_over_time({place="luna"}[1m])))
+   */
+  const vectorOps = getNodesFromQuery(query, [VectorOp]);
+  const supportedVectorOps = vectorOps.filter((node) => getNodeString(query, node) === 'sum');
+  const unsupportedVectorOps = vectorOps.filter((node) => getNodeString(query, node) !== 'sum');
+  const supportedWrappingVectorOpps = supportedVectorOps.filter((supportedOp) =>
+    unsupportedVectorOps.every((unsupportedOp) => supportedOp.from < unsupportedOp.from)
+  );
+  if (unsupportedVectorOps.length > 0) {
+    return supportedWrappingVectorOpps.length > 0;
+  }
+
+  const rangeOps = getNodesFromQuery(query, [RangeOp]);
+  const supportedRangeOps = ['count_over_time', 'sum_over_time', 'bytes_over_time'];
+  for (const node of rangeOps) {
+    if (!supportedRangeOps.includes(getNodeString(query, node))) {
+      return supportedWrappingVectorOpps.length > 0;
+    }
+  }
+
+  return true;
+}
+
+function getNodeString(query: string, node: SyntaxNode) {
+  return query.substring(node.from, node.to);
+}
+
 export const isLokiQuery = (query: DataQuery): query is LokiQuery => {
   if (!query) {
     return false;
   }
 
-  const lokiQuery = query as LokiQuery;
-  return lokiQuery.expr !== undefined;
+  return 'expr' in query && query.expr !== undefined;
 };
 
 export const getLokiQueryFromDataQuery = (query?: DataQuery): LokiQuery | undefined => {
@@ -293,38 +388,40 @@ export const getLokiQueryFromDataQuery = (query?: DataQuery): LokiQuery | undefi
   return query;
 };
 
-export function formatLogqlQuery(query: string, datasource: LokiDatasource) {
-  const isInvalid = isQueryWithError(datasource.interpolateString(query, placeHolderScopedVars));
-
-  reportInteraction('grafana_loki_format_query_clicked', {
-    is_invalid: isInvalid,
-    query_type: isLogsQuery(query) ? 'logs' : 'metric',
-  });
-
-  if (isInvalid) {
-    return query;
+export const interpolateShardingSelector = (queries: LokiQuery[], shards: number[]) => {
+  if (shards.length === 0) {
+    return queries;
   }
 
-  let transformedQuery = replaceVariables(query);
-  const transformationMatches = [];
-  const tree = parser.parse(transformedQuery);
+  let shardValue = shards.join('|');
 
-  // Variables are considered errors inside of the parser, so we need to remove them before formatting
-  // We replace all variables with [0s] and keep track of the replaced variables
-  // After formatting we replace [0s] with the original variable
-  if (tree.topNode.firstChild?.firstChild?.type.id === MetricExpr) {
-    const pattern = /\[__V_[0-2]__\w+__V__\]/g;
-    transformationMatches.push(...transformedQuery.matchAll(pattern));
-    transformedQuery = transformedQuery.replace(pattern, '[0s]');
+  // -1 means empty shard value
+  if (shardValue === '-1' || shards.length === 1) {
+    shardValue = shardValue === '-1' ? '' : shardValue;
+    return queries.map((query) => ({
+      ...query,
+      expr: addStreamShardLabelsToQuery(query.expr, '=', shardValue),
+    }));
   }
 
-  let formatted = formatLokiQuery(transformedQuery);
+  return queries.map((query) => ({
+    ...query,
+    expr: addStreamShardLabelsToQuery(query.expr, '=~', shardValue),
+  }));
+};
 
-  if (tree.topNode.firstChild?.firstChild?.type.id === MetricExpr) {
-    transformationMatches.forEach((match) => {
-      formatted = formatted.replace('[0s]', match[0]);
-    });
+function addStreamShardLabelsToQuery(query: string, operator: string, shardValue: string) {
+  const shardedQuery = addLabelToQuery(query, '__stream_shard__', operator, shardValue, LabelType.Indexed);
+  if (!isLogsQuery(query)) {
+    return addDropToQuery(shardedQuery, ['__stream_shard__']);
   }
-
-  return returnVariables(formatted);
+  return shardedQuery;
 }
+
+export const getSelectorForShardValues = (query: string) => {
+  const selector = getNodesFromQuery(query, [Selector]);
+  if (selector.length > 0) {
+    return query.substring(selector[0].from, selector[0].to);
+  }
+  return '';
+};

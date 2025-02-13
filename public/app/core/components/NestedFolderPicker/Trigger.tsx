@@ -1,21 +1,37 @@
 import { css, cx } from '@emotion/css';
-import React, { forwardRef, ReactNode, ButtonHTMLAttributes } from 'react';
-import Skeleton from 'react-loading-skeleton';
+import { forwardRef, ReactNode, ButtonHTMLAttributes } from 'react';
+import * as React from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
 import { Icon, getInputStyles, useTheme2, Text } from '@grafana/ui';
-import { focusCss } from '@grafana/ui/src/themes/mixins';
-import { Trans } from 'app/core/internationalization';
+import { getFocusStyles, getMouseFocusStyles } from '@grafana/ui/src/themes/mixins';
+import { Trans, t } from 'app/core/internationalization';
+
+import { FolderPickerSkeleton } from './Skeleton';
 
 interface TriggerProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   isLoading: boolean;
+  handleClearSelection?: (event: React.MouseEvent<SVGElement> | React.KeyboardEvent<SVGElement>) => void;
   invalid?: boolean;
   label?: ReactNode;
 }
 
-function Trigger({ isLoading, invalid, label, ...rest }: TriggerProps, ref: React.ForwardedRef<HTMLButtonElement>) {
+function Trigger(
+  { handleClearSelection, isLoading, invalid, label, ...rest }: TriggerProps,
+  ref: React.ForwardedRef<HTMLButtonElement>
+) {
   const theme = useTheme2();
   const styles = getStyles(theme, invalid);
+
+  const handleKeyDown = (event: React.KeyboardEvent<SVGElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      handleClearSelection?.(event);
+    }
+  };
+
+  if (isLoading) {
+    return <FolderPickerSkeleton />;
+  }
 
   return (
     <div className={styles.wrapper}>
@@ -32,14 +48,24 @@ function Trigger({ isLoading, invalid, label, ...rest }: TriggerProps, ref: Reac
           {...rest}
           ref={ref}
         >
-          {isLoading ? (
-            <Skeleton width={100} />
-          ) : label ? (
+          {label ? (
             <Text truncate>{label}</Text>
           ) : (
             <Text truncate color="secondary">
               <Trans i18nKey="browse-dashboards.folder-picker.button-label">Select folder</Trans>
             </Text>
+          )}
+
+          {!isLoading && handleClearSelection && (
+            <Icon
+              role="button"
+              tabIndex={0}
+              aria-label={t('browse-dashboards.folder-picker.clear-selection', 'Clear selection')}
+              className={styles.clearIcon}
+              name="times"
+              onClick={handleClearSelection}
+              onKeyDown={handleKeyDown}
+            />
           )}
         </button>
 
@@ -89,14 +115,27 @@ const getStyles = (theme: GrafanaTheme2, invalid = false) => {
           boxShadow: 'unset',
         },
 
-        '&:focus-visible': css`
-          ${focusCss(theme)}
-        `,
+        '&:focus-visible': getFocusStyles(theme),
+        alignItems: 'center',
+        display: 'flex',
+        flexWrap: 'nowrap',
+        justifyContent: 'space-between',
+        paddingRight: 28,
       },
     ]),
 
     hasPrefix: css({
       paddingLeft: 28,
+    }),
+
+    clearIcon: css({
+      color: theme.colors.text.secondary,
+      cursor: 'pointer',
+      '&:hover': {
+        color: theme.colors.text.primary,
+      },
+      '&:focus:not(:focus-visible)': getMouseFocusStyles(theme),
+      '&:focus-visible': getFocusStyles(theme),
     }),
   };
 };

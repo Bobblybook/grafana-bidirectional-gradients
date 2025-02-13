@@ -1,6 +1,7 @@
 import { css, cx } from '@emotion/css';
 import { partition } from 'lodash';
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import * as React from 'react';
 import { useAsync } from 'react-use';
 
 import {
@@ -14,9 +15,10 @@ import {
   LogsSortOrder,
   dateTime,
   TimeRange,
+  LoadingState,
 } from '@grafana/data';
 import { config, reportInteraction } from '@grafana/runtime';
-import { DataQuery, LoadingState, TimeZone } from '@grafana/schema';
+import { DataQuery, TimeZone } from '@grafana/schema';
 import { Button, Modal, useTheme2 } from '@grafana/ui';
 import store from 'app/core/store';
 import { SETTINGS_KEYS } from 'app/features/explore/Logs/utils/logs';
@@ -25,99 +27,98 @@ import { useDispatch } from 'app/types';
 
 import { dataFrameToLogsModel } from '../../logsModel';
 import { sortLogRows } from '../../utils';
+import { LoadingIndicator } from '../LoadingIndicator';
 import { LogRows } from '../LogRows';
 
-import { LoadingIndicator } from './LoadingIndicator';
 import { LogContextButtons } from './LogContextButtons';
-import { Place } from './types';
 
 const getStyles = (theme: GrafanaTheme2) => {
   return {
-    modal: css`
-      width: 85vw;
-      ${theme.breakpoints.down('md')} {
-        width: 100%;
-      }
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-    `,
-    sticky: css`
-      position: sticky;
-      z-index: 1;
-      top: -1px;
-      bottom: -1px;
-    `,
-    entry: css`
-      & > td {
-        padding: ${theme.spacing(1)} 0 ${theme.spacing(1)} 0;
-      }
-      background: ${theme.colors.emphasize(theme.colors.background.secondary)};
+    modal: css({
+      width: '85vw',
+      [theme.breakpoints.down('md')]: {
+        width: '100%',
+      },
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+    }),
+    sticky: css({
+      position: 'sticky',
+      zIndex: 1,
+      top: '-1px',
+      bottom: '-1px',
+    }),
+    entry: css({
+      '& > td': {
+        padding: theme.spacing(1, 0, 1, 0),
+      },
+      background: theme.colors.emphasize(theme.colors.background.secondary),
 
-      & > table {
-        margin-bottom: 0;
-      }
+      '& > table': {
+        marginBottom: 0,
+      },
 
-      & .log-row-menu {
-        margin-top: -6px;
-      }
-    `,
-    datasourceUi: css`
-      padding-bottom: ${theme.spacing(1.25)};
-      display: flex;
-      align-items: center;
-    `,
-    logRowGroups: css`
-      overflow: auto;
-      max-height: 75%;
-      align-self: stretch;
-      display: inline-block;
-      border: 1px solid ${theme.colors.border.weak};
-      border-radius: ${theme.shape.radius.default};
-      & > table {
-        min-width: 100%;
-      }
-    `,
-    flexColumn: css`
-      display: flex;
-      flex-direction: column;
-      padding: 0 ${theme.spacing(3)} ${theme.spacing(3)} ${theme.spacing(3)};
-    `,
-    flexRow: css`
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      & > div:last-child {
-        margin-left: auto;
-      }
-    `,
-    noMarginBottom: css`
-      & > table {
-        margin-bottom: 0;
-      }
-    `,
-    hidden: css`
-      display: none;
-    `,
-    paddingTop: css`
-      padding-top: ${theme.spacing(1)};
-    `,
-    paddingBottom: css`
-      padding-bottom: ${theme.spacing(1)};
-    `,
-    link: css`
-      color: ${theme.colors.text.secondary};
-      font-size: ${theme.typography.bodySmall.fontSize};
-      :hover {
-        color: ${theme.colors.text.link};
-      }
-    `,
-    loadingCell: css`
-      position: sticky;
-      left: 50%;
-      display: inline-block;
-      transform: translateX(-50%);
-    `,
+      '& .log-row-menu': {
+        marginTop: '-6px',
+      },
+    }),
+    datasourceUi: css({
+      paddingBottom: theme.spacing(1.25),
+      display: 'flex',
+      alignItems: 'center',
+    }),
+    logRowGroups: css({
+      overflow: 'auto',
+      maxHeight: '75%',
+      alignSelf: 'stretch',
+      display: 'inline-block',
+      border: `1px solid ${theme.colors.border.weak}`,
+      borderRadius: theme.shape.radius.default,
+      '& > table': {
+        minWidth: '100%',
+      },
+    }),
+    flexColumn: css({
+      display: 'flex',
+      flexDirection: 'column',
+      padding: theme.spacing(0, 3, 3, 3),
+    }),
+    flexRow: css({
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'center',
+      '& > div:last-child': {
+        marginLeft: 'auto',
+      },
+    }),
+    noMarginBottom: css({
+      '& > table': {
+        marginBottom: 0,
+      },
+    }),
+    hidden: css({
+      display: 'none',
+    }),
+    paddingTop: css({
+      paddingTop: theme.spacing(1),
+    }),
+    paddingBottom: css({
+      paddingBottom: theme.spacing(1),
+    }),
+    link: css({
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+      ':hover': {
+        color: theme.colors.text.link,
+      },
+    }),
+    loadingCell: css({
+      position: 'sticky',
+      left: '50%',
+      display: 'inline-block',
+      transform: 'translateX(-50%)',
+    }),
   };
 };
 
@@ -128,7 +129,11 @@ interface LogRowContextModalProps {
   onClose: () => void;
   getRowContext: (row: LogRowModel, options: LogRowContextOptions) => Promise<DataQueryResponse>;
 
-  getRowContextQuery?: (row: LogRowModel, options?: LogRowContextOptions) => Promise<DataQuery | null>;
+  getRowContextQuery?: (
+    row: LogRowModel,
+    options?: LogRowContextOptions,
+    cacheFilters?: boolean
+  ) => Promise<DataQuery | null>;
   logsSortOrder: LogsSortOrder;
   runContextQuery?: () => void;
   getLogRowContextUi?: DataSourceWithLogsContextSupport['getLogRowContextUi'];
@@ -138,6 +143,7 @@ type Section = {
   loadingState: LoadingState;
   rows: LogRowModel[];
 };
+type Place = 'above' | 'below';
 type Context = Record<Place, Section>;
 
 const makeEmptyContext = (): Context => ({
@@ -358,7 +364,10 @@ export const LogRowContextModal: React.FunctionComponent<LogRowContextModalProps
       // this way this array of rows will never be empty
       const allRows = [...above.rows, row, ...below.rows];
 
-      const newRows = await loadMore(place, allRows);
+      const newRows = (await loadMore(place, allRows)).map((r) =>
+        // apply the original row's searchWords to all the rows for highlighting
+        !r.searchWords || !r.searchWords?.length ? { ...r, searchWords: row.searchWords } : r
+      );
       const [older, newer] = partition(newRows, (newRow) => newRow.timeEpochNs > row.timeEpochNs);
       const newAbove = logsSortOrder === LogsSortOrder.Ascending ? newer : older;
       const newBelow = logsSortOrder === LogsSortOrder.Ascending ? older : newer;
@@ -510,7 +519,7 @@ export const LogRowContextModal: React.FunctionComponent<LogRowContextModalProps
               <td className={styles.loadingCell}>
                 {loadingStateAbove !== LoadingState.Done && loadingStateAbove !== LoadingState.Error && (
                   <div ref={aboveLoadingElement}>
-                    <LoadingIndicator place="above" />
+                    <LoadingIndicator adjective="newer" />
                   </div>
                 )}
                 {loadingStateAbove === LoadingState.Error && <div>Error loading log more logs.</div>}
@@ -531,6 +540,7 @@ export const LogRowContextModal: React.FunctionComponent<LogRowContextModalProps
                   displayedFields={displayedFields}
                   onClickShowField={showField}
                   onClickHideField={hideField}
+                  scrollElement={null}
                 />
               </td>
             </tr>
@@ -553,6 +563,7 @@ export const LogRowContextModal: React.FunctionComponent<LogRowContextModalProps
                   onPinLine={() => setSticky(true)}
                   pinnedRowId={sticky ? row.uid : undefined}
                   overflowingContent={true}
+                  scrollElement={null}
                 />
               </td>
             </tr>
@@ -571,6 +582,7 @@ export const LogRowContextModal: React.FunctionComponent<LogRowContextModalProps
                     displayedFields={displayedFields}
                     onClickShowField={showField}
                     onClickHideField={hideField}
+                    scrollElement={null}
                   />
                 </>
               </td>
@@ -579,7 +591,7 @@ export const LogRowContextModal: React.FunctionComponent<LogRowContextModalProps
               <td className={styles.loadingCell}>
                 {loadingStateBelow !== LoadingState.Done && loadingStateBelow !== LoadingState.Error && (
                   <div ref={belowLoadingElement}>
-                    <LoadingIndicator place="below" />
+                    <LoadingIndicator adjective="older" />
                   </div>
                 )}
                 {loadingStateBelow === LoadingState.Error && <div>Error loading log more logs.</div>}

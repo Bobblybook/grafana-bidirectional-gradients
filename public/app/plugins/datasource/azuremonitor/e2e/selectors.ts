@@ -23,11 +23,16 @@ export const components = {
     defaultSubscription: {
       input: 'data-testid default-subscription',
     },
+    serviceCredentialsEnabled: {
+      button: 'data-testid service-credentials-enabled',
+    },
   },
   queryEditor: {
     header: {
       select: 'data-testid azure-monitor-experimental-header',
     },
+    userAuthAlert: 'data-testid azure-monitor-user-auth-invalid-auth-provider-alert',
+    userAuthFallbackAlert: 'data-testid azure-monitor-user-auth-fallback-alert',
     resourcePicker: {
       select: {
         button: 'data-testid resource-picker-select',
@@ -107,6 +112,9 @@ export const components = {
     },
     region: {
       input: 'data-testid region',
+    },
+    customNamespace: {
+      input: 'data-testid custom-namespace',
     },
   },
 };

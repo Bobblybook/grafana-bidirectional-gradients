@@ -1,14 +1,14 @@
-import { Namespace } from 'i18next';
 import { find, startsWith } from 'lodash';
 
-import { DataSourceInstanceSettings, ScopedVars } from '@grafana/data';
-import { DataSourceWithBackend, getTemplateSrv, TemplateSrv } from '@grafana/runtime';
-import { getTimeSrv, TimeSrv } from 'app/features/dashboard/services/TimeSrv';
+import { AzureCredentials } from '@grafana/azure-sdk';
+import { ScopedVars } from '@grafana/data';
+import { DataSourceWithBackend, getTemplateSrv, TemplateSrv, VariableInterpolation } from '@grafana/runtime';
 
-import { getAuthType, getAzureCloud, getAzurePortalUrl } from '../credentials';
+import { getCredentials } from '../credentials';
 import TimegrainConverter from '../time_grain_converter';
 import {
-  AzureDataSourceJsonData,
+  AzureMonitorDataSourceInstanceSettings,
+  AzureMonitorDataSourceJsonData,
   AzureMonitorMetricsMetadataResponse,
   AzureMonitorQuery,
   AzureQueryType,
@@ -25,6 +25,7 @@ import {
   Location,
   ResourceGroup,
   Metric,
+  MetricNamespace,
 } from '../types';
 import { routeNames } from '../utils/common';
 import migrateQuery from '../utils/migrateQuery';
@@ -38,30 +39,33 @@ function hasValue(item?: string) {
   return !!(item && item !== defaultDropdownValue);
 }
 
-export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureMonitorQuery, AzureDataSourceJsonData> {
+export default class AzureMonitorDatasource extends DataSourceWithBackend<
+  AzureMonitorQuery,
+  AzureMonitorDataSourceJsonData
+> {
+  private readonly credentials: AzureCredentials;
   apiVersion = '2018-01-01';
   apiPreviewVersion = '2017-12-01-preview';
   listByResourceGroupApiVersion = '2021-04-01';
   providerApiVersion = '2021-04-01';
   locationsApiVersion = '2020-01-01';
   defaultSubscriptionId?: string;
+  basicLogsEnabled?: boolean;
   resourcePath: string;
-  azurePortalUrl: string;
   declare resourceGroup: string;
   declare resourceName: string;
-  timeSrv: TimeSrv;
-  templateSrv: TemplateSrv;
 
-  constructor(private instanceSettings: DataSourceInstanceSettings<AzureDataSourceJsonData>) {
+  constructor(
+    instanceSettings: AzureMonitorDataSourceInstanceSettings,
+    private readonly templateSrv: TemplateSrv = getTemplateSrv()
+  ) {
     super(instanceSettings);
+    this.credentials = getCredentials(instanceSettings);
 
-    this.timeSrv = getTimeSrv();
-    this.templateSrv = getTemplateSrv();
     this.defaultSubscriptionId = instanceSettings.jsonData.subscriptionId;
+    this.basicLogsEnabled = instanceSettings.jsonData.basicLogsEnabled;
 
-    const cloud = getAzureCloud(instanceSettings);
     this.resourcePath = routeNames.azureMonitor;
-    this.azurePortalUrl = getAzurePortalUrl(cloud);
   }
 
   isConfigured(): boolean {
@@ -92,14 +96,12 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
       throw new Error('Query is not a valid Azure Monitor Metrics query');
     }
 
-    const templateSrv = getTemplateSrv();
-
     // These properties need to be replaced pre-migration to ensure values are correctly interpolated
     if (preMigrationQuery.resourceUri) {
-      preMigrationQuery.resourceUri = templateSrv.replace(preMigrationQuery.resourceUri, scopedVars);
+      preMigrationQuery.resourceUri = this.templateSrv.replace(preMigrationQuery.resourceUri, scopedVars);
     }
     if (preMigrationQuery.metricDefinition) {
-      preMigrationQuery.metricDefinition = templateSrv.replace(preMigrationQuery.metricDefinition, scopedVars);
+      preMigrationQuery.metricDefinition = this.templateSrv.replace(preMigrationQuery.metricDefinition, scopedVars);
     }
 
     // fix for timeGrainUnit which is a deprecated/removed field name
@@ -117,20 +119,23 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
       throw new Error('Query is not a valid Azure Monitor Metrics query');
     }
 
-    const subscriptionId = templateSrv.replace(migratedTarget.subscription || this.defaultSubscriptionId, scopedVars);
+    const subscriptionId = this.templateSrv.replace(
+      migratedTarget.subscription || this.defaultSubscriptionId,
+      scopedVars
+    );
     const resources = migratedQuery.resources?.map((r) => this.replaceTemplateVariables(r, scopedVars)).flat();
-    const metricNamespace = templateSrv.replace(migratedQuery.metricNamespace, scopedVars);
-    const customNamespace = templateSrv.replace(migratedQuery.customNamespace, scopedVars);
-    const timeGrain = templateSrv.replace((migratedQuery.timeGrain || '').toString(), scopedVars);
-    const aggregation = templateSrv.replace(migratedQuery.aggregation, scopedVars);
-    const top = templateSrv.replace(migratedQuery.top || '', scopedVars);
+    const metricNamespace = this.templateSrv.replace(migratedQuery.metricNamespace, scopedVars);
+    const customNamespace = this.templateSrv.replace(migratedQuery.customNamespace, scopedVars);
+    const timeGrain = this.templateSrv.replace((migratedQuery.timeGrain || '').toString(), scopedVars);
+    const aggregation = this.templateSrv.replace(migratedQuery.aggregation, scopedVars);
+    const top = this.templateSrv.replace(migratedQuery.top || '', scopedVars);
 
     const dimensionFilters = (migratedQuery.dimensionFilters ?? [])
       .filter((f) => f.dimension && f.dimension !== 'None')
       .map((f) => {
-        const filters = f.filters?.map((filter) => templateSrv.replace(filter ?? '', scopedVars));
+        const filters = f.filters?.map((filter) => this.templateSrv.replace(filter ?? '', scopedVars));
         return {
-          dimension: templateSrv.replace(f.dimension, scopedVars),
+          dimension: this.templateSrv.replace(f.dimension, scopedVars),
           operator: f.operator || 'eq',
           filters: filters || [],
         };
@@ -143,8 +148,8 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
       customNamespace,
       timeGrain,
       allowedTimeGrainsMs: migratedQuery.allowedTimeGrainsMs,
-      metricName: templateSrv.replace(migratedQuery.metricName, scopedVars),
-      region: templateSrv.replace(migratedQuery.region, scopedVars),
+      metricName: this.templateSrv.replace(migratedQuery.metricName, scopedVars),
+      region: this.templateSrv.replace(migratedQuery.region, scopedVars),
       aggregation: aggregation,
       dimensionFilters,
       top: top || '10',
@@ -233,17 +238,22 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
     return (await Promise.all(promises)).flat();
   }
 
-  getMetricNamespaces(query: GetMetricNamespacesQuery, globalRegion: boolean) {
+  // Note globalRegion should be false when querying custom metric namespaces
+  getMetricNamespaces(query: GetMetricNamespacesQuery, globalRegion: boolean, region?: string, custom?: boolean) {
     const url = UrlBuilder.buildAzureMonitorGetMetricNamespacesUrl(
       this.resourcePath,
       this.apiPreviewVersion,
       // Only use the first query, as the metric namespaces should be the same for all queries
       this.replaceSingleTemplateVariables(query),
       globalRegion,
-      this.templateSrv
+      this.templateSrv,
+      region
     );
     return this.getResource(url)
-      .then((result: AzureAPIResponse<Namespace>) => {
+      .then((result: AzureAPIResponse<MetricNamespace>) => {
+        if (custom) {
+          result.value = result.value.filter((namespace) => namespace.classification === 'Custom');
+        }
         return ResponseParser.parseResponseValues(
           result,
           'properties.metricNamespaceName',
@@ -266,6 +276,10 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
           }
         }
         return result;
+      })
+      .catch((reason) => {
+        console.error(`Failed to get metric namespaces: ${reason}`);
+        return [];
       });
   }
 
@@ -303,17 +317,15 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
   }
 
   private validateDatasource(): DatasourceValidationResult | undefined {
-    const authType = getAuthType(this.instanceSettings);
-
-    if (authType === 'clientsecret') {
-      if (!this.isValidConfigField(this.instanceSettings.jsonData.tenantId)) {
+    if (this.credentials.authType === 'clientsecret') {
+      if (!this.isValidConfigField(this.credentials.tenantId)) {
         return {
           status: 'error',
           message: 'The Tenant Id field is required.',
         };
       }
 
-      if (!this.isValidConfigField(this.instanceSettings.jsonData.clientId)) {
+      if (!this.isValidConfigField(this.credentials.clientId)) {
         return {
           status: 'error',
           message: 'The Client Id field is required.',
@@ -330,7 +342,7 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
 
   private replaceSingleTemplateVariables<T extends { [K in keyof T]: string }>(query: T, scopedVars?: ScopedVars) {
     // This method evaluates template variables supporting multiple values but only returns the first value.
-    // This will work as far as the the first combination of variables is valid.
+    // This will work as far as the first combination of variables is valid.
     // For example if 'rg1' contains 'res1' and 'rg2' contains 'res2' then
     // { resourceGroup: ['rg1', 'rg2'], resourceName: ['res1', 'res2'] } would return
     // { resourceGroup: 'rg1', resourceName: 'res1' } which is valid but
@@ -343,19 +355,32 @@ export default class AzureMonitorDatasource extends DataSourceWithBackend<AzureM
     const workingQueries: Array<{ [K in keyof T]: string }> = [{ ...query }];
     const keys = Object.keys(query) as Array<keyof T>;
     keys.forEach((key) => {
-      const replaced = this.templateSrv.replace(workingQueries[0][key], scopedVars, 'raw');
-      if (replaced.includes(',')) {
-        const multiple = replaced.split(',');
-        const currentQueries = [...workingQueries];
-        multiple.forEach((value, i) => {
-          currentQueries.forEach((q) => {
-            if (i === 0) {
-              q[key] = value;
-            } else {
-              workingQueries.push({ ...q, [key]: value });
-            }
-          });
-        });
+      const rawValue = workingQueries[0][key];
+      let interpolated: VariableInterpolation[] = [];
+      const replaced = this.templateSrv.replace(rawValue, scopedVars, 'raw', interpolated);
+      if (interpolated.length > 0) {
+        for (const variable of interpolated) {
+          if (variable.found === false) {
+            continue;
+          }
+          if (variable.value.includes(',')) {
+            const multiple = variable.value.split(',');
+            const currentQueries = [...workingQueries];
+            multiple.forEach((value, i) => {
+              currentQueries.forEach((q) => {
+                if (i === 0) {
+                  q[key] = rawValue.replace(variable.match, value);
+                } else {
+                  workingQueries.push({ ...q, [key]: rawValue.replace(variable.match, value) });
+                }
+              });
+            });
+          } else {
+            workingQueries.forEach((q) => {
+              q[key] = replaced;
+            });
+          }
+        }
       } else {
         workingQueries.forEach((q) => {
           q[key] = replaced;

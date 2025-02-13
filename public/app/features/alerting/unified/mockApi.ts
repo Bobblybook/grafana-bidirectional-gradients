@@ -1,31 +1,33 @@
-import { uniqueId } from 'lodash';
-import { rest } from 'msw';
-import { setupServer, SetupServer } from 'msw/node';
-import 'whatwg-fetch';
+import { HttpResponse, http } from 'msw';
+import { SetupServer, setupServer } from 'msw/node';
 
-import { DataSourceInstanceSettings, PluginMeta } from '@grafana/data';
 import { setBackendSrv } from '@grafana/runtime';
+import { AlertGroupUpdated } from 'app/features/alerting/unified/api/alertRuleApi';
+import allHandlers from 'app/features/alerting/unified/mocks/server/all-handlers';
 import {
-  PromBuildInfoResponse,
+  setupAlertmanagerConfigMapDefaultState,
+  setupAlertmanagerStatusMapDefaultState,
+} from 'app/features/alerting/unified/mocks/server/entities/alertmanagers';
+import { resetRoutingTreeMap } from 'app/features/alerting/unified/mocks/server/entities/k8s/routingtrees';
+import { DashboardDTO, FolderDTO, OrgUser } from 'app/types';
+import {
   PromRulesResponse,
+  RulerGrafanaRuleDTO,
   RulerRuleGroupDTO,
   RulerRulesConfigDTO,
 } from 'app/types/unified-alerting-dto';
 
 import { backendSrv } from '../../../core/services/backend_srv';
 import {
-  AlertmanagerConfig,
   AlertManagerCortexConfig,
+  AlertmanagerConfig,
   AlertmanagerReceiver,
   EmailConfig,
   GrafanaManagedReceiverConfig,
   MatcherOperator,
   Route,
 } from '../../../plugins/datasource/alertmanager/types';
-import { FolderDTO, NotifierDTO } from '../../../types';
-
-import { CreateIntegrationDTO, NewOnCallIntegrationDTO, OnCallIntegrationDTO } from './api/onCallApi';
-import { AlertingQueryResponse } from './state/AlertingQueryRunner';
+import { DashboardSearchItem } from '../../search/types';
 
 type Configurator<T> = (builder: T) => T;
 
@@ -119,7 +121,9 @@ class GrafanaReceiverConfigBuilder {
   }
 
   addSetting(key: string, value: string): GrafanaReceiverConfigBuilder {
-    this.grafanaReceiverConfig.settings[key] = value;
+    if (this.grafanaReceiverConfig.settings) {
+      this.grafanaReceiverConfig.settings[key] = value;
+    }
     return this;
   }
 
@@ -128,7 +132,7 @@ class GrafanaReceiverConfigBuilder {
   }
 }
 
-class AlertmanagerReceiverBuilder {
+export class AlertmanagerReceiverBuilder {
   private receiver: AlertmanagerReceiver = { name: '', email_configs: [], grafana_managed_receiver_configs: [] };
 
   withName(name: string): AlertmanagerReceiverBuilder {
@@ -153,178 +157,60 @@ class AlertmanagerReceiverBuilder {
   }
 }
 
-export class OnCallIntegrationBuilder {
-  private onCallIntegration: NewOnCallIntegrationDTO = {
-    id: uniqueId('oncall-integration-mock-'),
-    integration: '',
-    integration_url: '',
-    verbal_name: '',
-    connected_escalations_chains_count: 0,
-  };
-
-  withIntegration(integration: string): OnCallIntegrationBuilder {
-    this.onCallIntegration.integration = integration;
-    return this;
-  }
-
-  withIntegrationUrl(integrationUrl: string): OnCallIntegrationBuilder {
-    this.onCallIntegration.integration_url = integrationUrl;
-    return this;
-  }
-
-  withVerbalName(verbalName: string): OnCallIntegrationBuilder {
-    this.onCallIntegration.verbal_name = verbalName;
-    return this;
-  }
-
-  build() {
-    return this.onCallIntegration;
-  }
-}
-
-export function mockApi(server: SetupServer) {
-  return {
-    getAlertmanagerConfig: (amName: string, configure: (builder: AlertmanagerConfigBuilder) => void) => {
-      const builder = new AlertmanagerConfigBuilder();
-      configure(builder);
-
-      server.use(
-        rest.get(`api/alertmanager/${amName}/config/api/v1/alerts`, (req, res, ctx) =>
-          res(
-            ctx.status(200),
-            ctx.json<AlertManagerCortexConfig>({
-              alertmanager_config: builder.build(),
-              template_files: {},
-            })
-          )
-        )
-      );
-    },
-
-    eval: (response: AlertingQueryResponse) => {
-      server.use(
-        rest.post('/api/v1/eval', (_, res, ctx) => {
-          return res(ctx.status(200), ctx.json(response));
-        })
-      );
-    },
-    grafanaNotifiers: (response: NotifierDTO[]) => {
-      server.use(
-        rest.get(`api/alert-notifiers`, (req, res, ctx) => res(ctx.status(200), ctx.json<NotifierDTO[]>(response)))
-      );
-    },
-
-    plugins: {
-      getPluginSettings: (response: PluginMeta) => {
-        server.use(
-          rest.get(`api/plugins/${response.id}/settings`, (req, res, ctx) =>
-            res(ctx.status(200), ctx.json<PluginMeta>(response))
-          )
-        );
-      },
-    },
-
-    oncall: {
-      getOnCallIntegrations: (response: OnCallIntegrationDTO[]) => {
-        server.use(
-          rest.get(`api/plugin-proxy/grafana-oncall-app/api/internal/v1/alert_receive_channels`, (_, res, ctx) =>
-            res(ctx.status(200), ctx.json<OnCallIntegrationDTO[]>(response))
-          )
-        );
-      },
-      features: (response: string[]) => {
-        server.use(
-          rest.get(`api/plugin-proxy/grafana-oncall-app/api/internal/v1/features`, (_, res, ctx) =>
-            res(ctx.status(200), ctx.json<string[]>(response))
-          )
-        );
-      },
-      validateIntegrationName: (invalidNames: string[]) => {
-        server.use(
-          rest.get(
-            `api/plugin-proxy/grafana-oncall-app/api/internal/v1/alert_receive_channels/validate_name`,
-            (req, res, ctx) => {
-              const isValid = !invalidNames.includes(req.url.searchParams.get('verbal_name') ?? '');
-              return res(ctx.status(isValid ? 200 : 409), ctx.json<boolean>(isValid));
-            }
-          )
-        );
-      },
-      createIntegraion: () => {
-        server.use(
-          rest.post<CreateIntegrationDTO>(
-            `api/plugin-proxy/grafana-oncall-app/api/internal/v1/alert_receive_channels`,
-            async (req, res, ctx) => {
-              const body = await req.json<CreateIntegrationDTO>();
-              const integrationId = uniqueId('oncall-integration-');
-
-              return res(
-                ctx.status(200),
-                ctx.json<NewOnCallIntegrationDTO>({
-                  id: integrationId,
-                  integration: body.integration,
-                  integration_url: `https://oncall-endpoint.example.com/${integrationId}`,
-                  verbal_name: body.verbal_name,
-                  connected_escalations_chains_count: 0,
-                })
-              );
-            }
-          )
-        );
-      },
-    },
-  };
-}
+export const getMockConfig = (configure: (builder: AlertmanagerConfigBuilder) => void): AlertManagerCortexConfig => {
+  const builder = new AlertmanagerConfigBuilder();
+  configure(builder);
+  return { alertmanager_config: builder.build(), template_files: {} };
+};
 
 export function mockAlertRuleApi(server: SetupServer) {
   return {
     prometheusRuleNamespaces: (dsName: string, response: PromRulesResponse) => {
       server.use(
-        rest.get(`api/prometheus/${dsName}/api/v1/rules`, (req, res, ctx) =>
-          res(ctx.status(200), ctx.json<PromRulesResponse>(response))
-        )
+        http.get(`api/prometheus/${dsName}/api/v1/rules`, () => HttpResponse.json<PromRulesResponse>(response))
       );
     },
     rulerRules: (dsName: string, response: RulerRulesConfigDTO) => {
-      server.use(
-        rest.get(`/api/ruler/${dsName}/api/v1/rules`, (req, res, ctx) => res(ctx.status(200), ctx.json(response)))
-      );
+      server.use(http.get(`/api/ruler/${dsName}/api/v1/rules`, () => HttpResponse.json(response)));
+    },
+    updateRule: (dsName: string, response: AlertGroupUpdated) => {
+      server.use(http.post(`/api/ruler/${dsName}/api/v1/rules/:namespaceUid`, () => HttpResponse.json(response)));
     },
     rulerRuleGroup: (dsName: string, namespace: string, group: string, response: RulerRuleGroupDTO) => {
       server.use(
-        rest.get(`/api/ruler/${dsName}/api/v1/rules/${namespace}/${group}`, (req, res, ctx) =>
-          res(ctx.status(200), ctx.json(response))
-        )
+        http.get(`/api/ruler/${dsName}/api/v1/rules/${namespace}/${group}`, () => HttpResponse.json(response))
       );
+    },
+    getAlertRule: (uid: string, response: RulerGrafanaRuleDTO) => {
+      server.use(http.get(`/api/ruler/grafana/api/v1/rule/${uid}`, () => HttpResponse.json(response)));
     },
   };
 }
 
-/**
- * Used to mock the response from the /api/v1/status/buildinfo endpoint
- */
-export function mockFeatureDiscoveryApi(server: SetupServer) {
+export function mockExportApi(server: SetupServer) {
+  // exportRule, exportRulesGroup, exportRulesFolder use the same API endpoint but with different parameters
   return {
-    /**
-     *
-     * @param dsSettings Use `mockDataSource` to create a faks data source settings
-     * @param response Use `buildInfoResponse` to get a pre-defined response for Prometheus and Mimir
-     */
-    discoverDsFeatures: (dsSettings: DataSourceInstanceSettings, response: PromBuildInfoResponse) => {
+    // exportRulesGroup requires folderUid and group parameters and doesn't allow ruleUid parameter
+    exportRulesGroup: (folderUid: string, group: string, response: Record<string, string>) => {
       server.use(
-        rest.get(`${dsSettings.url}/api/v1/status/buildinfo`, (_, res, ctx) => res(ctx.status(200), ctx.json(response)))
+        http.get('/api/ruler/grafana/api/v1/export/rules', ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get('folderUid') === folderUid && url.searchParams.get('group') === group) {
+            const format = url.searchParams.get('format') ?? 'yaml';
+            return HttpResponse.text(response[format]);
+          }
+
+          return HttpResponse.text('', { status: 500 });
+        })
       );
     },
-  };
-}
-
-export function mockProvisioningApi(server: SetupServer) {
-  return {
-    exportRuleGroup: (folderUid: string, groupName: string, response: Record<string, string>) => {
+    modifiedExport: (namespaceUID: string, response: Record<string, string>) => {
       server.use(
-        rest.get(`/api/v1/provisioning/folder/${folderUid}/rule-groups/${groupName}/export`, (req, res, ctx) =>
-          res(ctx.status(200), ctx.text(response[req.url.searchParams.get('format') ?? 'yaml']))
-        )
+        http.post(`/api/ruler/grafana/api/v1/rules/${namespaceUID}/export`, ({ request }) => {
+          const url = new URL(request.url);
+          const format = url.searchParams.get('format') ?? 'yaml';
+          return HttpResponse.text(response[format]);
+        })
       );
     },
   };
@@ -333,18 +219,56 @@ export function mockProvisioningApi(server: SetupServer) {
 export function mockFolderApi(server: SetupServer) {
   return {
     folder: (folderUid: string, response: FolderDTO) => {
-      server.use(rest.get(`/api/folders/${folderUid}`, (_, res, ctx) => res(ctx.status(200), ctx.json(response))));
+      server.use(http.get(`/api/folders/${folderUid}`, () => HttpResponse.json(response)));
     },
   };
 }
 
-// Creates a MSW server and sets up beforeAll, afterAll and beforeEach handlers for it
-export function setupMswServer() {
-  const server = setupServer();
+export function mockSearchApi(server: SetupServer) {
+  return {
+    search: (results: DashboardSearchItem[]) => {
+      server.use(http.get(`/api/search`, () => HttpResponse.json(results)));
+    },
+  };
+}
 
+export function mockUserApi(server: SetupServer) {
+  return {
+    user: (user: OrgUser) => {
+      server.use(http.get(`/api/user`, () => HttpResponse.json(user)));
+    },
+  };
+}
+
+export function mockDashboardApi(server: SetupServer) {
+  return {
+    search: (results: DashboardSearchItem[]) => {
+      server.use(http.get(`/api/search`, () => HttpResponse.json(results)));
+    },
+    dashboard: (response: DashboardDTO) => {
+      server.use(http.get(`/api/dashboards/uid/${response.dashboard.uid}`, () => HttpResponse.json(response)));
+    },
+  };
+}
+
+const server = setupServer(...allHandlers);
+
+/**
+ * Sets up beforeAll, afterAll and beforeEach handlers for mock server
+ */
+export function setupMswServer() {
   beforeAll(() => {
     setBackendSrv(backendSrv);
     server.listen({ onUnhandledRequest: 'error' });
+  });
+
+  afterEach(() => {
+    server.resetHandlers();
+
+    // Reset any other necessary mock entities/state
+    setupAlertmanagerConfigMapDefaultState();
+    setupAlertmanagerStatusMapDefaultState();
+    resetRoutingTreeMap();
   });
 
   afterAll(() => {
@@ -353,3 +277,5 @@ export function setupMswServer() {
 
   return server;
 }
+
+export default server;

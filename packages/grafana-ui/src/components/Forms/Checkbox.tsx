@@ -1,9 +1,10 @@
 import { css, cx } from '@emotion/css';
-import React, { HTMLProps, useCallback } from 'react';
+import { HTMLProps, useCallback } from 'react';
+import * as React from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
 
-import { useTheme2 } from '../../themes';
+import { useStyles2 } from '../../themes';
 import { getFocusStyles, getMouseFocusStyles } from '../../themes/mixins';
 
 import { getLabelStyles } from './Label';
@@ -12,7 +13,7 @@ export interface CheckboxProps extends Omit<HTMLProps<HTMLInputElement>, 'value'
   /** Label to display next to checkbox */
   label?: string;
   /** Description to display under the label */
-  description?: string;
+  description?: string | React.ReactElement;
   /** Current value of the checkbox */
   value?: boolean;
   /** htmlValue allows to specify the input "value" attribute */
@@ -36,8 +37,7 @@ export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
       },
       [onChange]
     );
-    const theme = useTheme2();
-    const styles = getCheckboxStyles(theme, invalid);
+    const styles = useStyles2(getCheckboxStyles, invalid);
 
     const ariaChecked = indeterminate ? 'mixed' : undefined;
 
@@ -113,10 +113,10 @@ export const getCheckboxStyles = (theme: GrafanaTheme2, invalid = false) => {
           content: '""',
           position: 'absolute',
           zIndex: 2,
-          left: '4px',
+          left: theme.spacing(0.5),
           top: 0,
-          width: '6px',
-          height: '12px',
+          width: theme.spacing(0.75),
+          height: theme.spacing(1.5),
           border: `solid ${theme.colors.primary.contrastText}`,
           borderWidth: '0 3px 3px 0',
           transform: 'rotate(45deg)',

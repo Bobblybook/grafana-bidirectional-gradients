@@ -1,32 +1,35 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 import { Provider } from 'react-redux';
-import { AutoSizerProps } from 'react-virtualized-auto-sizer';
+import { Props } from 'react-virtualized-auto-sizer';
 import { byRole, byTestId, byText } from 'testing-library-selector';
 
-import { logInfo } from '@grafana/runtime';
 import { contextSrv } from 'app/core/services/context_srv';
 import { configureStore } from 'app/store/configureStore';
-import { CombinedRuleGroup, CombinedRuleNamespace } from 'app/types/unified-alerting';
+import { AccessControlAction } from 'app/types';
+import { CombinedRuleGroup, CombinedRuleNamespace, RulerDataSourceConfig } from 'app/types/unified-alerting';
 
-import { LogMessages } from '../../Analytics';
+import * as analytics from '../../Analytics';
+import { GRAFANA_RULER_CONFIG } from '../../api/featureDiscoveryApi';
 import { useHasRuler } from '../../hooks/useHasRuler';
-import { mockFolderApi, mockProvisioningApi, setupMswServer } from '../../mockApi';
-import { disableRBAC, mockCombinedRule, mockDataSource, mockFolder, mockGrafanaRulerRule } from '../../mocks';
+import { mockExportApi, mockFolderApi, setupMswServer } from '../../mockApi';
+import { grantUserPermissions, mockCombinedRule, mockDataSource, mockFolder, mockGrafanaRulerRule } from '../../mocks';
+import { mimirDataSource } from '../../mocks/server/configure';
 
 import { RulesGroup } from './RulesGroup';
 
 jest.mock('../../hooks/useHasRuler');
-jest.mock('@grafana/runtime', () => {
-  const original = jest.requireActual('@grafana/runtime');
-  return {
-    ...original,
-    logInfo: jest.fn(),
-  };
-});
+
+jest.spyOn(analytics, 'logInfo');
+
 jest.mock('react-virtualized-auto-sizer', () => {
-  return ({ children }: AutoSizerProps) => children({ height: 600, width: 1 });
+  return ({ children }: Props) =>
+    children({
+      height: 600,
+      scaledHeight: 600,
+      scaledWidth: 1,
+      width: 1,
+    });
 });
 jest.mock('@grafana/ui', () => ({
   ...jest.requireActual('@grafana/ui'),
@@ -37,15 +40,17 @@ const mocks = {
   useHasRuler: jest.mocked(useHasRuler),
 };
 
-function mockUseHasRuler(hasRuler: boolean, rulerRulesLoaded: boolean) {
+function mockUseHasRuler(hasRuler: boolean, rulerConfig: RulerDataSourceConfig) {
   mocks.useHasRuler.mockReturnValue({
-    hasRuler: () => hasRuler,
-    rulerRulesLoaded: () => rulerRulesLoaded,
+    hasRuler,
+    rulerConfig,
   });
 }
 
 beforeEach(() => {
   mocks.useHasRuler.mockReset();
+  // FIXME: scope down
+  grantUserPermissions(Object.values(AccessControlAction));
 });
 
 const ui = {
@@ -56,16 +61,14 @@ const ui = {
     header: byText('Delete group'),
     confirmButton: byText('Delete'),
   },
-  moreActionsButton: byRole('button', { name: 'More' }),
   export: {
-    dialog: byRole('dialog', { name: 'Drawer title Export' }),
+    dialog: byRole('dialog', { name: /Drawer title Export .* rules/ }),
     jsonTab: byRole('tab', { name: /JSON/ }),
     yamlTab: byRole('tab', { name: /YAML/ }),
     editor: byTestId('code-editor'),
     copyCodeButton: byRole('button', { name: 'Copy code' }),
     downloadButton: byRole('button', { name: 'Download' }),
   },
-  loadingSpinner: byTestId('spinner'),
 };
 
 const server = setupMswServer();
@@ -104,10 +107,12 @@ describe('Rules group tests', () => {
       groups: [group],
     };
 
-    it('Should hide delete and edit group buttons', () => {
+    it('Should hide delete and edit group buttons', async () => {
       // Act
-      mockUseHasRuler(true, true);
+      mockUseHasRuler(true, GRAFANA_RULER_CONFIG);
+      mockFolderApi(server).folder('cpu-usage', mockFolder({ uid: 'cpu-usage', canSave: false }));
       renderRulesGroup(namespace, group);
+      expect(await screen.findByTestId('rule-group')).toBeInTheDocument();
 
       // Assert
       expect(ui.deleteGroupButton.query()).not.toBeInTheDocument();
@@ -116,9 +121,9 @@ describe('Rules group tests', () => {
 
     it('Should allow exporting rules group', async () => {
       // Arrange
-      mockUseHasRuler(true, true);
+      mockUseHasRuler(true, GRAFANA_RULER_CONFIG);
       mockFolderApi(server).folder('cpu-usage', mockFolder({ uid: 'cpu-usage' }));
-      mockProvisioningApi(server).exportRuleGroup('cpu-usage', 'TestGroup', {
+      mockExportApi(server).exportRulesGroup('cpu-usage', 'TestGroup', {
         yaml: 'Yaml Export Content',
         json: 'Json Export Content',
       });
@@ -148,6 +153,8 @@ describe('Rules group tests', () => {
   });
 
   describe('Cloud rules', () => {
+    const { rulerConfig } = mimirDataSource();
+
     beforeEach(() => {
       contextSrv.isEditor = true;
     });
@@ -164,11 +171,9 @@ describe('Rules group tests', () => {
       groups: [group],
     };
 
-    disableRBAC();
-
     it('When ruler enabled should display delete and edit group buttons', () => {
       // Arrange
-      mockUseHasRuler(true, true);
+      mockUseHasRuler(true, rulerConfig);
 
       // Act
       renderRulesGroup(namespace, group);
@@ -181,7 +186,7 @@ describe('Rules group tests', () => {
 
     it('When ruler disabled should hide delete and edit group buttons', () => {
       // Arrange
-      mockUseHasRuler(false, false);
+      mockUseHasRuler(false, rulerConfig);
 
       // Act
       renderRulesGroup(namespace, group);
@@ -194,7 +199,7 @@ describe('Rules group tests', () => {
 
     it('Delete button click should display confirmation modal', async () => {
       // Arrange
-      mockUseHasRuler(true, true);
+      mockUseHasRuler(true, rulerConfig);
 
       // Act
       renderRulesGroup(namespace, group);
@@ -203,40 +208,6 @@ describe('Rules group tests', () => {
       // Assert
       expect(ui.confirmDeleteModal.header.get()).toBeInTheDocument();
       expect(ui.confirmDeleteModal.confirmButton.get()).toBeInTheDocument();
-    });
-  });
-
-  describe('Analytics', () => {
-    beforeEach(() => {
-      contextSrv.isEditor = true;
-    });
-
-    const group: CombinedRuleGroup = {
-      name: 'TestGroup',
-      rules: [mockCombinedRule()],
-      totals: {},
-    };
-
-    const namespace: CombinedRuleNamespace = {
-      name: 'TestNamespace',
-      rulesSource: mockDataSource(),
-      groups: [group],
-    };
-
-    disableRBAC();
-
-    it('Should log info when closing the edit group rule modal without saving', async () => {
-      mockUseHasRuler(true, true);
-      renderRulesGroup(namespace, group);
-
-      await userEvent.click(ui.editGroupButton.get());
-
-      expect(screen.getByText('Cancel')).toBeInTheDocument();
-
-      await userEvent.click(screen.getByText('Cancel'));
-
-      expect(screen.queryByText('Cancel')).not.toBeInTheDocument();
-      expect(logInfo).toHaveBeenCalledWith(LogMessages.leavingRuleGroupEdit);
     });
   });
 });

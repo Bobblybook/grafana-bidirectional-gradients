@@ -33,6 +33,10 @@ load(
     "shellcheck_pipeline",
 )
 load(
+    "scripts/drone/pipelines/swagger_gen.star",
+    "swagger_gen",
+)
+load(
     "scripts/drone/pipelines/test_backend.star",
     "test_backend",
 )
@@ -47,6 +51,10 @@ load(
 load(
     "scripts/drone/pipelines/verify_starlark.star",
     "verify_starlark",
+)
+load(
+    "scripts/drone/pipelines/verify_storybook.star",
+    "verify_storybook",
 )
 
 ver_mode = "pr"
@@ -77,6 +85,12 @@ def pr_pipelines():
             ),
             ver_mode,
         ),
+        verify_storybook(
+            get_pr_trigger(
+                include_paths = ["packages/grafana-ui/**"],
+            ),
+            ver_mode,
+        ),
         test_frontend(
             get_pr_trigger(
                 exclude_paths = ["pkg/**", "packaging/**", "go.sum", "go.mod"],
@@ -92,6 +106,7 @@ def pr_pipelines():
         test_backend(
             get_pr_trigger(
                 include_paths = [
+                    "Makefile",
                     "pkg/**",
                     "packaging/**",
                     ".drone.yml",
@@ -99,7 +114,9 @@ def pr_pipelines():
                     "go.sum",
                     "go.mod",
                     "public/app/plugins/**/plugin.json",
+                    "docs/sources/setup-grafana/configure-grafana/feature-toggles/**",
                     "devenv/**",
+                    "apps/**",
                 ],
             ),
             ver_mode,
@@ -107,6 +124,8 @@ def pr_pipelines():
         lint_backend_pipeline(
             get_pr_trigger(
                 include_paths = [
+                    ".golangci.toml",
+                    "Makefile",
                     "pkg/**",
                     "packaging/**",
                     ".drone.yml",
@@ -116,6 +135,7 @@ def pr_pipelines():
                     "public/app/plugins/**/plugin.json",
                     "devenv/**",
                     ".bingo/**",
+                    "apps/**",
                 ],
             ),
             ver_mode,
@@ -137,6 +157,9 @@ def pr_pipelines():
         ),
         docs_pipelines(ver_mode, trigger_docs_pr()),
         shellcheck_pipeline(),
+        swagger_gen(
+            ver_mode,
+        ),
         integration_benchmarks(
             prefix = ver_mode,
         ),

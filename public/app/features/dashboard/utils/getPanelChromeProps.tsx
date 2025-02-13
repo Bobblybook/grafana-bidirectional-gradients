@@ -1,14 +1,16 @@
-import React from 'react';
+import * as React from 'react';
 
 import { LinkModel, PanelData, PanelPlugin, renderMarkdown } from '@grafana/data';
-import { config, getTemplateSrv, locationService, reportInteraction } from '@grafana/runtime';
+import { config, getTemplateSrv, locationService } from '@grafana/runtime';
 import { PanelPadding } from '@grafana/ui';
+import { DashboardInteractions } from 'app/features/dashboard-scene/utils/interactions';
 import { InspectTab } from 'app/features/inspector/types';
 import { getPanelLinksSupplier } from 'app/features/panel/panellinks/linkSuppliers';
-import { isAngularDatasourcePlugin } from 'app/features/plugins/angularDeprecation/utils';
+import { isAngularDatasourcePluginAndNotHidden } from 'app/features/plugins/angularDeprecation/utils';
 
 import { PanelHeaderTitleItems } from '../dashgrid/PanelHeader/PanelHeaderTitleItems';
-import { DashboardModel, PanelModel } from '../state';
+import { DashboardModel } from '../state/DashboardModel';
+import { PanelModel } from '../state/PanelModel';
 
 interface CommonProps {
   panel: PanelModel;
@@ -25,8 +27,6 @@ interface CommonProps {
 }
 
 export function getPanelChromeProps(props: CommonProps) {
-  let descriptionInteractionReported = false;
-
   function hasOverlayHeader() {
     // always show normal header if we have time override
     if (props.data.request && props.data.request.timeInfo) {
@@ -39,12 +39,6 @@ export function getPanelChromeProps(props: CommonProps) {
   const onShowPanelDescription = () => {
     const descriptionMarkdown = getTemplateSrv().replace(props.panel.description, props.panel.scopedVars);
     const interpolatedDescription = renderMarkdown(descriptionMarkdown);
-
-    if (!descriptionInteractionReported) {
-      // Description rendering function can be called multiple times due to re-renders but we want to report the interaction once.
-      reportInteraction('dashboards_panelheader_description_displayed');
-      descriptionInteractionReported = true;
-    }
 
     return interpolatedDescription;
   };
@@ -59,7 +53,7 @@ export function getPanelChromeProps(props: CommonProps) {
     return panelLinks.map((panelLink) => ({
       ...panelLink,
       onClick: (...args) => {
-        reportInteraction('dashboards_panelheader_datalink_clicked', { has_multiple_links: panelLinks.length > 1 });
+        DashboardInteractions.panelLinkClicked({ has_multiple_links: panelLinks.length > 1 });
         panelLink.onClick?.(...args);
       },
     }));
@@ -73,21 +67,21 @@ export function getPanelChromeProps(props: CommonProps) {
   const onOpenErrorInspect = (e: React.SyntheticEvent) => {
     e.stopPropagation();
     locationService.partial({ inspect: props.panel.id, inspectTab: InspectTab.Error });
-    reportInteraction('dashboards_panelheader_statusmessage_clicked');
+    DashboardInteractions.panelStatusMessageClicked();
   };
 
   const onCancelQuery = () => {
     props.panel.getQueryRunner().cancelQuery();
-    reportInteraction('dashboards_panelheader_cancelquery_clicked', { data_state: props.data.state });
+    DashboardInteractions.panelCancelQueryClicked({ data_state: props.data.state });
   };
 
   const padding: PanelPadding = props.plugin.noPadding ? 'none' : 'md';
   const alertState = props.data.alertState?.state;
 
   const isAngularDatasource = props.panel.datasource?.uid
-    ? isAngularDatasourcePlugin(props.panel.datasource?.uid)
+    ? isAngularDatasourcePluginAndNotHidden(props.panel.datasource?.uid)
     : false;
-  const isAngularPanel = props.panel.isAngularPlugin();
+  const isAngularPanel = props.panel.isAngularPlugin() && !props.plugin.meta.angular?.hideDeprecation;
   const showAngularNotice =
     (config.featureToggles.angularDeprecationUI ?? false) && (isAngularDatasource || isAngularPanel);
 
@@ -120,10 +114,6 @@ export function getPanelChromeProps(props: CommonProps) {
 
   const title = props.panel.getDisplayTitle();
 
-  const onOpenMenu = () => {
-    reportInteraction('dashboards_panelheader_menu', { item: 'menu' });
-  };
-
   return {
     hasOverlayHeader,
     onShowPanelDescription,
@@ -136,6 +126,5 @@ export function getPanelChromeProps(props: CommonProps) {
     dragClass,
     title,
     titleItems,
-    onOpenMenu,
   };
 }

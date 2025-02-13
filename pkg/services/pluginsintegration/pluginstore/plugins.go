@@ -4,35 +4,37 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 
 	"github.com/grafana/grafana/pkg/plugins"
+	"github.com/grafana/grafana/pkg/plugins/auth"
 )
 
 type Plugin struct {
 	plugins.JSONData
 
-	fs                plugins.FS
+	FS                plugins.FS
 	supportsStreaming bool
 
 	Class plugins.Class
 
 	// App fields
+	Parent          *ParentPlugin
 	IncludedInAppID string
 	DefaultNavURL   string
 	Pinned          bool
 
 	// Signature fields
-	Signature      plugins.SignatureStatus
-	SignatureType  plugins.SignatureType
-	SignatureOrg   string
-	SignatureError *plugins.SignatureError
+	Signature     plugins.SignatureStatus
+	SignatureType plugins.SignatureType
+	SignatureOrg  string
+
+	Error *plugins.Error
 
 	// SystemJS fields
 	Module  string
 	BaseURL string
 
-	AngularDetected bool
+	Angular plugins.AngularMeta
 
-	// This will be moved to plugin.json when we have general support in gcom
-	Alias string `json:"alias,omitempty"`
+	ExternalService *auth.ExternalService
 }
 
 func (p Plugin) SupportsStreaming() bool {
@@ -40,7 +42,7 @@ func (p Plugin) SupportsStreaming() bool {
 }
 
 func (p Plugin) Base() string {
-	return p.fs.Base()
+	return p.FS.Base()
 }
 
 func (p Plugin) IsApp() bool {
@@ -58,8 +60,8 @@ func ToGrafanaDTO(p *plugins.Plugin) Plugin {
 		supportsStreaming = true
 	}
 
-	return Plugin{
-		fs:                p.FS,
+	dto := Plugin{
+		FS:                p.FS,
 		supportsStreaming: supportsStreaming,
 		Class:             p.Class,
 		JSONData:          p.JSONData,
@@ -69,10 +71,20 @@ func ToGrafanaDTO(p *plugins.Plugin) Plugin {
 		Signature:         p.Signature,
 		SignatureType:     p.SignatureType,
 		SignatureOrg:      p.SignatureOrg,
-		SignatureError:    p.SignatureError,
+		Error:             p.Error,
 		Module:            p.Module,
 		BaseURL:           p.BaseURL,
-		AngularDetected:   p.AngularDetected,
-		Alias:             p.Alias,
+		ExternalService:   p.ExternalService,
+		Angular:           p.Angular,
 	}
+
+	if p.Parent != nil {
+		dto.Parent = &ParentPlugin{ID: p.Parent.ID}
+	}
+
+	return dto
+}
+
+type ParentPlugin struct {
+	ID string
 }

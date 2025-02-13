@@ -1,42 +1,46 @@
-import { PanelBuilders, SceneFlexItem, SceneQueryRunner, SceneTimeRange } from '@grafana/scenes';
-import { DataSourceRef, GraphDrawStyle } from '@grafana/schema';
+import { PanelBuilders, SceneFlexItem, SceneQueryRunner } from '@grafana/scenes';
+import { DataSourceRef, GraphDrawStyle, TooltipDisplayMode } from '@grafana/schema';
 
-const QUERY_A =
-  'sum(grafanacloud_instance_rule_evaluations_total:rate5m) - sum(grafanacloud_instance_rule_evaluation_failures_total:rate5m)';
+import { INSTANCE_ID, PANEL_STYLES, overrideToFixedColor } from '../../../home/Insights';
+import { InsightsMenuButton } from '../../InsightsMenuButton';
 
-const QUERY_B = 'sum(grafanacloud_instance_rule_evaluation_failures_total:rate5m)';
+export function getEvalSuccessVsFailuresScene(datasource: DataSourceRef, panelTitle: string) {
+  const exprA = INSTANCE_ID
+    ? `sum(grafanacloud_instance_rule_evaluations_total:rate5m{stack_id="${INSTANCE_ID}"}) - sum(grafanacloud_instance_rule_evaluation_failures_total:rate5m{stack_id="${INSTANCE_ID}"})`
+    : `sum(grafanacloud_instance_rule_evaluations_total:rate5m) - sum(grafanacloud_instance_rule_evaluation_failures_total:rate5m)`;
 
-export function getEvalSuccessVsFailuresScene(
-  timeRange: SceneTimeRange,
-  datasource: DataSourceRef,
-  panelTitle: string
-) {
+  const exprB = INSTANCE_ID
+    ? `sum(grafanacloud_instance_rule_evaluation_failures_total:rate5m{stack_id="${INSTANCE_ID}"})`
+    : `sum(grafanacloud_instance_rule_evaluation_failures_total:rate5m)`;
+
   const query = new SceneQueryRunner({
     datasource,
     queries: [
       {
         refId: 'A',
-        expr: QUERY_A,
+        expr: exprA,
         range: true,
         legendFormat: 'success',
       },
       {
         refId: 'B',
-        expr: QUERY_B,
+        expr: exprB,
         range: true,
         legendFormat: 'failed',
       },
     ],
-    $timeRange: timeRange,
   });
 
   return new SceneFlexItem({
-    width: 'calc(50% - 4px)',
-    height: 300,
+    ...PANEL_STYLES,
     body: PanelBuilders.timeseries()
       .setTitle(panelTitle)
+      .setDescription('The number of successful and failed alert rule evaluations')
       .setData(query)
       .setCustomFieldConfig('drawStyle', GraphDrawStyle.Line)
+      .setOption('tooltip', { mode: TooltipDisplayMode.Multi })
+      .setOverrides((b) => b.matchFieldsWithName('failed').overrideColor(overrideToFixedColor('failed')))
+      .setHeaderActions([new InsightsMenuButton({ panel: panelTitle })])
       .build(),
   });
 }

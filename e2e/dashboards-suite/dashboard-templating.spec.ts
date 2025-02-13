@@ -2,12 +2,15 @@ import { e2e } from '../utils';
 
 describe('Dashboard templating', () => {
   beforeEach(() => {
-    e2e.flows.login(e2e.env('USERNAME'), e2e.env('PASSWORD'));
+    e2e.flows.login(Cypress.env('USERNAME'), Cypress.env('PASSWORD'));
   });
 
   it('Verify variable interpolation works', () => {
     // Open dashboard global variables and interpolation
     e2e.flows.openDashboard({ uid: 'HYaGDGIMk' });
+
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const example = `Example: from=now-6h&to=now&timezone=${encodeURIComponent(timeZone)}`;
 
     const items: string[] = [];
     const expectedItems: string[] = [
@@ -31,12 +34,12 @@ describe('Dashboard templating', () => {
       `Server:percentencode = %7BA%27A%22A%2CBB%5CB%2CCCC%7D`,
       `Server:singlequote = 'A\\'A"A','BB\\B','CCC'`,
       `Server:doublequote = "A'A\\"A","BB\\B","CCC"`,
-      `Server:sqlstring = 'A''A"A','BB\\\B','CCC'`,
+      `Server:sqlstring = 'A''A\\"A','BB\\\B','CCC'`,
       `Server:date = NaN`,
       `Server:text = All`,
-      `Server:queryparam = var-Server=All`,
+      `Server:queryparam = var-Server=$__all`,
       `1 < 2`,
-      `Example: from=now-6h&to=now`,
+      example,
     ];
 
     cy.get('.markdown-html li')
@@ -51,10 +54,10 @@ describe('Dashboard templating', () => {
       });
 
     // Check link interpolation is working correctly
-    cy.contains('a', 'Example: from=now-6h&to=now').should(
+    cy.contains('a', example).should(
       'have.attr',
       'href',
-      'https://example.com/?from=now-6h&to=now'
+      `https://example.com/?from=now-6h&to=now&timezone=${encodeURIComponent(timeZone)}`
     );
   });
 });

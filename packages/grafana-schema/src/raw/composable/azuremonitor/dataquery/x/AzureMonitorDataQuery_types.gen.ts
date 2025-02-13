@@ -4,14 +4,13 @@
 //     public/app/plugins/gen.go
 // Using jennies:
 //     TSTypesJenny
-//     LatestMajorsOrXJenny
-//     PluginEachMajorJenny
+//     PluginTsTypesJenny
 //
 // Run 'make gen-cue' from repository root to regenerate.
 
 import * as common from '@grafana/schema';
 
-export const pluginVersion = "1.0.0";
+export const pluginVersion = "%VERSION%";
 
 export interface AzureMonitorQuery extends common.DataQuery {
   /**
@@ -31,22 +30,36 @@ export interface AzureMonitorQuery extends common.DataQuery {
    */
   azureTraces?: AzureTracesQuery;
   /**
+   * Custom namespace used in template variable queries
+   */
+  customNamespace?: string;
+  /**
    * @deprecated Legacy template variable support.
    */
   grafanaTemplateVariableFn?: GrafanaTemplateVariableQuery;
+  /**
+   * Namespace used in template variable queries
+   */
   namespace?: string;
   /**
-   * Azure Monitor query type.
-   * queryType: #AzureQueryType
+   * Used only for exemplar queries from Prometheus
+   */
+  query?: string;
+  /**
+   * Region used in template variable queries
    */
   region?: string;
+  /**
+   * Resource used in template variable queries
+   */
   resource?: string;
   /**
-   * Template variables params. These exist for backwards compatiblity with legacy template variables.
+   * Resource group used in template variable queries
    */
   resourceGroup?: string;
   /**
    * Azure subscription containing the resource(s) to be queried.
+   * Also used for template variable queries
    */
   subscription?: string;
   /**
@@ -66,6 +79,8 @@ export enum AzureQueryType {
   AzureMonitor = 'Azure Monitor',
   AzureResourceGraph = 'Azure Resource Graph',
   AzureTraces = 'Azure Traces',
+  CustomMetricNamesQuery = 'Azure Custom Metric Names',
+  CustomNamespacesQuery = 'Azure Custom Namespaces',
   GrafanaTemplateVariableFn = 'Grafana Template Variable Function',
   LocationsQuery = 'Azure Regions',
   LogAnalytics = 'Azure Log Analytics',
@@ -74,6 +89,7 @@ export enum AzureQueryType {
   ResourceGroupsQuery = 'Azure Resource Groups',
   ResourceNamesQuery = 'Azure Resource Names',
   SubscriptionsQuery = 'Azure Subscriptions',
+  TraceExemplar = 'traceql',
   WorkspacesQuery = 'Azure Workspaces',
 }
 
@@ -165,7 +181,15 @@ export const defaultAzureMetricQuery: Partial<AzureMetricQuery> = {
  */
 export interface AzureLogsQuery {
   /**
-   * If set to true the intersection of time ranges specified in the query and Grafana will be used. Otherwise the query time ranges will be used. Defaults to false
+   * If set to true the query will be run as a basic logs query
+   */
+  basicLogsQuery?: boolean;
+  /**
+   * If set to true the dashboard time range will be used as a filter for the query. Otherwise the query time ranges will be used. Defaults to false.
+   */
+  dashboardTime?: boolean;
+  /**
+   * @deprecated Use dashboardTime instead
    */
   intersectTime?: boolean;
   /**
@@ -185,7 +209,11 @@ export interface AzureLogsQuery {
    */
   resultFormat?: ResultFormat;
   /**
-   * Workspace ID. This was removed in Grafana 8, but remains for backwards compat
+   * If dashboardTime is set to true this value dictates which column the time filter will be applied to. Defaults to the first tables timeSpan column, the first datetime column found, or TimeGenerated
+   */
+  timeColumn?: string;
+  /**
+   * Workspace ID. This was removed in Grafana 8, but remains for backwards compat.
    */
   workspace?: string;
 }
@@ -250,6 +278,7 @@ export const defaultAzureTracesFilter: Partial<AzureTracesFilter> = {
 };
 
 export enum ResultFormat {
+  Logs = 'logs',
   Table = 'table',
   TimeSeries = 'time_series',
   Trace = 'trace',

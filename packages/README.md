@@ -36,7 +36,7 @@ Every commit to main that has changes within the `packages` directory is a subje
 
 > All of the steps below must be performed on a release branch, according to Grafana Release Guide.
 
-> You must be logged in to NPM as part of Grafana NPM org before attempting to publish to the npm registery.
+> You must be logged in to NPM as part of Grafana NPM org before attempting to publish to the npm registry.
 
 1. Run `yarn packages:clean` script from the root directory. This will delete any previous builds of the packages.
 2. Run `yarn packages:prepare` script from the root directory. This performs tests on the packages and prompts for the version of the packages. The version should be the same as the one being released.
@@ -73,7 +73,7 @@ In this guide you will set up [Verdaccio](https://verdaccio.org/) registry local
 From your terminal:
 
 1. Navigate to `devenv/local-npm` directory.
-2. Run `docker-compose up`. This will start your local npm registry, available at http://localhost:4873/.
+2. Run `docker compose up`. This will start your local npm registry, available at http://localhost:4873/.
 3. To test `@grafana` packages published to your local npm registry uncomment `npmScopes` and `unsafeHttpWhitelist` properties in the `.yarnrc` file.
 
 #### Publishing packages to local npm registry

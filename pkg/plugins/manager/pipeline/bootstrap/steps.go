@@ -3,7 +3,7 @@ package bootstrap
 import (
 	"context"
 	"path"
-	"strings"
+	"slices"
 
 	"github.com/grafana/grafana/pkg/infra/slugify"
 	"github.com/grafana/grafana/pkg/plugins"
@@ -27,11 +27,12 @@ func DefaultConstructFunc(signatureCalculator plugins.SignatureCalculator, asset
 }
 
 // DefaultDecorateFuncs are the default DecorateFuncs used for the Decorate step of the Bootstrap stage.
-func DefaultDecorateFuncs(cfg *config.Cfg) []DecorateFunc {
+func DefaultDecorateFuncs(cfg *config.PluginManagementCfg) []DecorateFunc {
 	return []DecorateFunc{
-		AliasDecorateFunc,
 		AppDefaultNavURLDecorateFunc,
-		AppChildDecorateFunc(cfg),
+		TemplateDecorateFunc,
+		AppChildDecorateFunc(),
+		SkipHostEnvVarsDecorateFunc(cfg),
 	}
 }
 
@@ -45,49 +46,21 @@ func NewDefaultConstructor(signatureCalculator plugins.SignatureCalculator, asse
 }
 
 // Construct will calculate the plugin's signature state and create the plugin using the pluginFactoryFunc.
-func (c *DefaultConstructor) Construct(ctx context.Context, src plugins.PluginSource, bundles []*plugins.FoundBundle) ([]*plugins.Plugin, error) {
-	res := make([]*plugins.Plugin, 0, len(bundles))
-
-	for _, bundle := range bundles {
-		sig, err := c.signatureCalculator.Calculate(ctx, src, bundle.Primary)
-		if err != nil {
-			c.log.Warn("Could not calculate plugin signature state", "pluginId", bundle.Primary.JSONData.ID, "error", err)
-			continue
-		}
-		plugin, err := c.pluginFactoryFunc(bundle.Primary, src.PluginClass(ctx), sig)
-		if err != nil {
-			c.log.Error("Could not create primary plugin base", "pluginId", bundle.Primary.JSONData.ID, "error", err)
-			continue
-		}
-		res = append(res, plugin)
-
-		children := make([]*plugins.Plugin, 0, len(bundle.Children))
-		for _, child := range bundle.Children {
-			cp, err := c.pluginFactoryFunc(*child, plugin.Class, sig)
-			if err != nil {
-				c.log.Error("Could not create child plugin base", "pluginId", child.JSONData.ID, "error", err)
-				continue
-			}
-			cp.Parent = plugin
-			plugin.Children = append(plugin.Children, cp)
-
-			children = append(children, cp)
-		}
-		res = append(res, children...)
+func (c *DefaultConstructor) Construct(ctx context.Context, src plugins.PluginSource, bundle *plugins.FoundBundle) ([]*plugins.Plugin, error) {
+	sig, err := c.signatureCalculator.Calculate(ctx, src, bundle.Primary)
+	if err != nil {
+		c.log.Warn("Could not calculate plugin signature state", "pluginId", bundle.Primary.JSONData.ID, "error", err)
+		return nil, err
 	}
-
+	plugin, err := c.pluginFactoryFunc(bundle, src.PluginClass(ctx), sig)
+	if err != nil {
+		c.log.Error("Could not create primary plugin base", "pluginId", bundle.Primary.JSONData.ID, "error", err)
+		return nil, err
+	}
+	res := make([]*plugins.Plugin, 0, len(plugin.Children)+1)
+	res = append(res, plugin)
+	res = append(res, plugin.Children...)
 	return res, nil
-}
-
-// AliasDecorateFunc is a DecorateFunc that sets the alias for the plugin.
-func AliasDecorateFunc(_ context.Context, p *plugins.Plugin) (*plugins.Plugin, error) {
-	switch p.ID {
-	case "grafana-pyroscope-datasource": // rebranding
-		p.Alias = "phlare"
-	case "debug": // panel plugin used for testing
-		p.Alias = "debugX"
-	}
-	return p, nil
 }
 
 // AppDefaultNavURLDecorateFunc is a DecorateFunc that sets the default nav URL for app plugins.
@@ -95,6 +68,22 @@ func AppDefaultNavURLDecorateFunc(_ context.Context, p *plugins.Plugin) (*plugin
 	if p.IsApp() {
 		setDefaultNavURL(p)
 	}
+	return p, nil
+}
+
+// TemplateDecorateFunc is a DecorateFunc that removes the placeholder for the version and last_update fields.
+func TemplateDecorateFunc(_ context.Context, p *plugins.Plugin) (*plugins.Plugin, error) {
+	// %VERSION% and %TODAY% are valid values, according to the plugin schema
+	// but it's meant to be replaced by the build system with the actual version and date.
+	// If not, it's the same than not having a version or a date.
+	if p.Info.Version == "%VERSION%" {
+		p.Info.Version = ""
+	}
+
+	if p.Info.Updated == "%TODAY%" {
+		p.Info.Updated = ""
+	}
+
 	return p, nil
 }
 
@@ -125,26 +114,34 @@ func setDefaultNavURL(p *plugins.Plugin) {
 }
 
 // AppChildDecorateFunc is a DecorateFunc that configures child plugins of app plugins.
-func AppChildDecorateFunc(cfg *config.Cfg) DecorateFunc {
+func AppChildDecorateFunc() DecorateFunc {
 	return func(_ context.Context, p *plugins.Plugin) (*plugins.Plugin, error) {
 		if p.Parent != nil && p.Parent.IsApp() {
-			configureAppChildPlugin(cfg, p.Parent, p)
+			configureAppChildPlugin(p.Parent, p)
 		}
 		return p, nil
 	}
 }
 
-func configureAppChildPlugin(cfg *config.Cfg, parent *plugins.Plugin, child *plugins.Plugin) {
+func configureAppChildPlugin(parent *plugins.Plugin, child *plugins.Plugin) {
 	if !parent.IsApp() {
 		return
 	}
 	child.IncludedInAppID = parent.ID
-	child.BaseURL = parent.BaseURL
 
-	appSubPath := strings.ReplaceAll(strings.Replace(child.FS.Base(), parent.FS.Base(), "", 1), "\\", "/")
-	if parent.IsCorePlugin() {
-		child.Module = path.Join("core:plugin", parent.ID, appSubPath)
-	} else {
-		child.Module = path.Join("/", cfg.GrafanaAppSubURL, "/public/plugins", parent.ID, appSubPath, "module.js")
+	// If the child plugin does not have a version, it will inherit the version from the parent.
+	// This is to ensure that the frontend can appropriately cache the plugin assets.
+	if child.Info.Version == "" {
+		child.Info.Version = parent.Info.Version
+	}
+}
+
+// SkipHostEnvVarsDecorateFunc returns a DecorateFunc that configures the SkipHostEnvVars field of the plugin.
+// It will be set to true if the FlagPluginsSkipHostEnvVars feature flag is set, and the plugin is not present in the
+// ForwardHostEnvVars plugin ids list.
+func SkipHostEnvVarsDecorateFunc(cfg *config.PluginManagementCfg) DecorateFunc {
+	return func(_ context.Context, p *plugins.Plugin) (*plugins.Plugin, error) {
+		p.SkipHostEnvVars = cfg.Features.SkipHostEnvVarsEnabled && !slices.Contains(cfg.ForwardHostEnvVars, p.ID)
+		return p, nil
 	}
 }

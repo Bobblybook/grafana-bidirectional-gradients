@@ -11,11 +11,10 @@ import (
 
 	"github.com/grafana/grafana/pkg/api/response"
 	"github.com/grafana/grafana/pkg/middleware/requestmeta"
-	"github.com/grafana/grafana/pkg/plugins/backendplugin"
+	"github.com/grafana/grafana/pkg/plugins"
 	"github.com/grafana/grafana/pkg/plugins/httpresponsesender"
 	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
 	"github.com/grafana/grafana/pkg/services/datasources"
-	"github.com/grafana/grafana/pkg/services/pluginsintegration/plugincontext"
 	"github.com/grafana/grafana/pkg/util/proxyutil"
 	"github.com/grafana/grafana/pkg/web"
 )
@@ -28,9 +27,9 @@ func (hs *HTTPServer) CallResource(c *contextmodel.ReqContext) {
 }
 
 func (hs *HTTPServer) callPluginResource(c *contextmodel.ReqContext, pluginID string) {
-	pCtx, err := hs.pluginContextProvider.Get(c.Req.Context(), pluginID, c.SignedInUser, c.OrgID)
+	pCtx, err := hs.pluginContextProvider.Get(c.Req.Context(), pluginID, c.SignedInUser, c.SignedInUser.GetOrgID())
 	if err != nil {
-		if errors.Is(err, plugincontext.ErrPluginNotFound) {
+		if errors.Is(err, plugins.ErrPluginNotRegistered) {
 			c.JsonApiErr(404, "Plugin not found", nil)
 			return
 		}
@@ -55,7 +54,7 @@ func (hs *HTTPServer) callPluginResource(c *contextmodel.ReqContext, pluginID st
 func (hs *HTTPServer) callPluginResourceWithDataSource(c *contextmodel.ReqContext, pluginID string, ds *datasources.DataSource) {
 	pCtx, err := hs.pluginContextProvider.GetWithDataSource(c.Req.Context(), pluginID, c.SignedInUser, ds)
 	if err != nil {
-		if errors.Is(err, plugincontext.ErrPluginNotFound) {
+		if errors.Is(err, plugins.ErrPluginNotRegistered) {
 			c.JsonApiErr(404, "Plugin not found", nil)
 			return
 		}
@@ -63,12 +62,7 @@ func (hs *HTTPServer) callPluginResourceWithDataSource(c *contextmodel.ReqContex
 		return
 	}
 
-	var dsURL string
-	if pCtx.DataSourceInstanceSettings != nil {
-		dsURL = pCtx.DataSourceInstanceSettings.URL
-	}
-
-	err = hs.PluginRequestValidator.Validate(dsURL, c.Req)
+	err = hs.DataSourceRequestValidator.Validate(ds, c.Req)
 	if err != nil {
 		c.JsonApiErr(http.StatusForbidden, "Access denied", err)
 		return
@@ -91,14 +85,11 @@ func (hs *HTTPServer) callPluginResourceWithDataSource(c *contextmodel.ReqContex
 func (hs *HTTPServer) pluginResourceRequest(c *contextmodel.ReqContext) (*http.Request, error) {
 	clonedReq := c.Req.Clone(c.Req.Context())
 	rawURL := web.Params(c.Req)["*"]
-	if clonedReq.URL.RawQuery != "" {
-		rawURL += "?" + clonedReq.URL.RawQuery
+
+	clonedReq.URL = &url.URL{
+		Path:     rawURL,
+		RawQuery: clonedReq.URL.RawQuery,
 	}
-	urlPath, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, err
-	}
-	clonedReq.URL = urlPath
 
 	return clonedReq, nil
 }
@@ -125,16 +116,6 @@ func (hs *HTTPServer) makePluginResourceRequest(w http.ResponseWriter, req *http
 }
 
 func handleCallResourceError(err error, reqCtx *contextmodel.ReqContext) {
-	if errors.Is(err, backendplugin.ErrPluginUnavailable) {
-		reqCtx.JsonApiErr(http.StatusServiceUnavailable, "Plugin unavailable", err)
-		return
-	}
-
-	if errors.Is(err, backendplugin.ErrMethodNotImplemented) {
-		reqCtx.JsonApiErr(http.StatusNotFound, "Not found", err)
-		return
-	}
-
 	resp := response.ErrOrFallback(http.StatusInternalServerError, "Failed to call resource", err)
 	resp.WriteTo(reqCtx)
 }

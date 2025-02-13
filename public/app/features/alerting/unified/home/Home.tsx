@@ -1,50 +1,56 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 import { config } from '@grafana/runtime';
-import { Tab, TabContent, TabsBar } from '@grafana/ui';
+import { Box, Stack, Tab, TabContent, TabsBar } from '@grafana/ui';
 
 import { AlertingPageWrapper } from '../components/AlertingPageWrapper';
+import { isLocalDevEnv } from '../utils/misc';
+import { withPageErrorBoundary } from '../withPageErrorBoundary';
 
 import GettingStarted, { WelcomeHeader } from './GettingStarted';
-import Insights from './Insights';
+import { getInsightsScenes, insightsIsAvailable } from './Insights';
+import { PluginIntegrations } from './PluginIntegrations';
 
-type HomeTabs = 'insights' | 'gettingStarted';
+function Home() {
+  const insightsEnabled = (insightsIsAvailable() || isLocalDevEnv()) && Boolean(config.featureToggles.alertingInsights);
 
-export default function Home() {
-  const [activeTab, setActiveTab] = useState<HomeTabs>('insights');
+  const [activeTab, setActiveTab] = useState<'insights' | 'overview'>(insightsEnabled ? 'insights' : 'overview');
+  const insightsScene = getInsightsScenes();
 
-  const alertingInsightsEnabled = config.featureToggles.alertingInsights;
   return (
-    <AlertingPageWrapper pageId={'alerting'}>
-      {alertingInsightsEnabled && (
-        <>
-          <WelcomeHeader />
-          <TabsBar>
+    <AlertingPageWrapper
+      title="Alerting"
+      subTitle="Learn about problems in your systems moments after they occur"
+      navId="alerting"
+    >
+      <Stack gap={2} direction="column">
+        <WelcomeHeader />
+        <PluginIntegrations />
+      </Stack>
+      <Box marginTop={{ lg: 2, md: 0, xs: 0 }}>
+        <TabsBar>
+          {insightsEnabled && (
             <Tab
-              key={'insights'}
-              label={'Insights'}
+              key="insights"
+              label="Insights"
               active={activeTab === 'insights'}
-              onChangeTab={() => {
-                setActiveTab('insights');
-              }}
+              onChangeTab={() => setActiveTab('insights')}
             />
-            <Tab
-              key={'gettingStarted'}
-              label={'Overview'}
-              active={activeTab === 'gettingStarted'}
-              onChangeTab={() => {
-                setActiveTab('gettingStarted');
-              }}
-            />
-          </TabsBar>
-          <TabContent>
-            {activeTab === 'insights' && <Insights />}
-            {activeTab === 'gettingStarted' && <GettingStarted />}
-          </TabContent>
-        </>
-      )}
-
-      {!alertingInsightsEnabled && <GettingStarted showWelcomeHeader={true} />}
+          )}
+          <Tab
+            key="overview"
+            label="Get started"
+            active={activeTab === 'overview'}
+            onChangeTab={() => setActiveTab('overview')}
+          />
+        </TabsBar>
+        <TabContent>
+          {activeTab === 'insights' && <insightsScene.Component model={insightsScene} />}
+          {activeTab === 'overview' && <GettingStarted />}
+        </TabContent>
+      </Box>
     </AlertingPageWrapper>
   );
 }
+
+export default withPageErrorBoundary(Home);

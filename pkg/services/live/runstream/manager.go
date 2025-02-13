@@ -10,9 +10,9 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/services/auth/identity"
-	"github.com/grafana/grafana/pkg/services/pluginsintegration/plugincontext"
+	"github.com/grafana/grafana/pkg/plugins"
 )
 
 var (
@@ -116,17 +116,21 @@ func (s *Manager) handleDatasourceEvent(orgID int64, dsUID string, resubmit bool
 		s.mu.RUnlock()
 		return nil
 	}
-	var resubmitRequests []streamRequest
-	var waitChannels []chan struct{}
+
+	resubmitRequests := make([]streamRequest, 0, len(dsStreams))
+	waitChannels := make([]chan struct{}, 0, len(dsStreams))
 	for channel := range dsStreams {
 		streamCtx, ok := s.streams[channel]
 		if !ok {
 			continue
 		}
+
 		streamCtx.cancelFn()
+
 		waitChannels = append(waitChannels, streamCtx.CloseCh)
 		resubmitRequests = append(resubmitRequests, streamCtx.streamRequest)
 	}
+
 	s.mu.RUnlock()
 
 	// Wait for all streams to stop.
@@ -185,7 +189,7 @@ func (s *Manager) watchStream(ctx context.Context, cancelFn func(), sr streamReq
 				dsUID := sr.PluginContext.DataSourceInstanceSettings.UID
 				pCtx, err := s.pluginContextGetter.GetPluginContext(ctx, sr.user, sr.PluginContext.PluginID, dsUID, false)
 				if err != nil {
-					if errors.Is(err, plugincontext.ErrPluginNotFound) {
+					if errors.Is(err, plugins.ErrPluginNotRegistered) {
 						logger.Debug("Datasource not found, stop stream", "channel", sr.Channel, "path", sr.Path)
 						return
 					}
@@ -286,7 +290,7 @@ func (s *Manager) runStream(ctx context.Context, cancelFn func(), sr streamReque
 			}
 			newPluginCtx, err := s.pluginContextGetter.GetPluginContext(ctx, sr.user, pluginCtx.PluginID, datasourceUID, false)
 			if err != nil {
-				if errors.Is(err, plugincontext.ErrPluginNotFound) {
+				if errors.Is(err, plugins.ErrPluginNotRegistered) {
 					logger.Info("No plugin context found, stopping stream", "path", sr.Path)
 					return
 				}
@@ -410,7 +414,7 @@ func (s *Manager) SubmitStream(ctx context.Context, user identity.Requester, cha
 		}
 		newPluginCtx, err := s.pluginContextGetter.GetPluginContext(ctx, user, pCtx.PluginID, datasourceUID, false)
 		if err != nil {
-			if errors.Is(err, plugincontext.ErrPluginNotFound) {
+			if errors.Is(err, plugins.ErrPluginNotRegistered) {
 				return nil, errDatasourceNotFound
 			}
 			return nil, err

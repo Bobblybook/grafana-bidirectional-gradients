@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
 	"github.com/grafana/grafana/pkg/components/simplejson"
-	"github.com/grafana/grafana/pkg/infra/log"
 	es "github.com/grafana/grafana/pkg/tsdb/elasticsearch/client"
 )
 
@@ -20,40 +21,50 @@ const (
 )
 
 type elasticsearchDataQuery struct {
-	client      es.Client
-	dataQueries []backend.DataQuery
-	logger      log.Logger
-	ctx         context.Context
+	client               es.Client
+	dataQueries          []backend.DataQuery
+	logger               log.Logger
+	ctx                  context.Context
+	keepLabelsInResponse bool
 }
 
-var newElasticsearchDataQuery = func(ctx context.Context, client es.Client, dataQuery []backend.DataQuery, logger log.Logger) *elasticsearchDataQuery {
+var newElasticsearchDataQuery = func(ctx context.Context, client es.Client, req *backend.QueryDataRequest, logger log.Logger) *elasticsearchDataQuery {
+	_, fromAlert := req.Headers[headerFromAlert]
+	fromExpression := req.GetHTTPHeader(headerFromExpression) != ""
+
 	return &elasticsearchDataQuery{
 		client:      client,
-		dataQueries: dataQuery,
+		dataQueries: req.Queries,
 		logger:      logger,
 		ctx:         ctx,
+		// To maintain backward compatibility, it is necessary to keep labels in responses for alerting and expressions queries.
+		// Historically, these labels have been used in alerting rules and transformations.
+		keepLabelsInResponse: fromAlert || fromExpression,
 	}
 }
 
 func (e *elasticsearchDataQuery) execute() (*backend.QueryDataResponse, error) {
 	start := time.Now()
+	response := backend.NewQueryDataResponse()
 	e.logger.Debug("Parsing queries", "queriesLength", len(e.dataQueries))
 	queries, err := parseQuery(e.dataQueries, e.logger)
 	if err != nil {
 		mq, _ := json.Marshal(e.dataQueries)
 		e.logger.Error("Failed to parse queries", "error", err, "queries", string(mq), "queriesLength", len(queries), "duration", time.Since(start), "stage", es.StagePrepareRequest)
-		return &backend.QueryDataResponse{}, err
+		response.Responses[e.dataQueries[0].RefID] = backend.ErrorResponseWithErrorSource(err)
+		return response, nil
 	}
 
 	ms := e.client.MultiSearch()
 
-	from := e.dataQueries[0].TimeRange.From.UnixNano() / int64(time.Millisecond)
-	to := e.dataQueries[0].TimeRange.To.UnixNano() / int64(time.Millisecond)
 	for _, q := range queries {
+		from := q.TimeRange.From.UnixNano() / int64(time.Millisecond)
+		to := q.TimeRange.To.UnixNano() / int64(time.Millisecond)
 		if err := e.processQuery(q, ms, from, to); err != nil {
 			mq, _ := json.Marshal(q)
 			e.logger.Error("Failed to process query to multisearch request builder", "error", err, "query", string(mq), "queriesLength", len(queries), "duration", time.Since(start), "stage", es.StagePrepareRequest)
-			return &backend.QueryDataResponse{}, err
+			response.Responses[q.RefID] = backend.ErrorResponseWithErrorSource(err)
+			return response, nil
 		}
 	}
 
@@ -61,27 +72,41 @@ func (e *elasticsearchDataQuery) execute() (*backend.QueryDataResponse, error) {
 	if err != nil {
 		mqs, _ := json.Marshal(e.dataQueries)
 		e.logger.Error("Failed to build multisearch request", "error", err, "queriesLength", len(queries), "queries", string(mqs), "duration", time.Since(start), "stage", es.StagePrepareRequest)
-		return &backend.QueryDataResponse{}, err
+		response.Responses[e.dataQueries[0].RefID] = backend.ErrorResponseWithErrorSource(err)
+		return response, nil
 	}
 
 	e.logger.Info("Prepared request", "queriesLength", len(queries), "duration", time.Since(start), "stage", es.StagePrepareRequest)
 	res, err := e.client.ExecuteMultisearch(req)
 	if err != nil {
-		return &backend.QueryDataResponse{}, err
+		if backend.IsDownstreamHTTPError(err) {
+			err = backend.DownstreamError(err)
+		}
+		response.Responses[e.dataQueries[0].RefID] = backend.ErrorResponseWithErrorSource(err)
+		return response, nil
 	}
 
-	return parseResponse(e.ctx, res.Responses, queries, e.client.GetConfiguredFields(), e.logger)
+	if res.Status >= 400 {
+		statusErr := fmt.Errorf("unexpected status code: %d", res.Status)
+		if backend.ErrorSourceFromHTTPStatus(res.Status) == backend.ErrorSourceDownstream {
+			response.Responses[e.dataQueries[0].RefID] = backend.ErrorResponseWithErrorSource(backend.DownstreamError(statusErr))
+		} else {
+			response.Responses[e.dataQueries[0].RefID] = backend.ErrorResponseWithErrorSource(backend.PluginError(statusErr))
+		}
+		return response, nil
+	}
+
+	return parseResponse(e.ctx, res.Responses, queries, e.client.GetConfiguredFields(), e.keepLabelsInResponse, e.logger)
 }
 
 func (e *elasticsearchDataQuery) processQuery(q *Query, ms *es.MultiSearchRequestBuilder, from, to int64) error {
 	err := isQueryWithError(q)
 	if err != nil {
-		err = fmt.Errorf("received invalid query. %w", err)
-		return err
+		return backend.DownstreamError(fmt.Errorf("received invalid query. %w", err))
 	}
 
 	defaultTimeField := e.client.GetConfiguredFields().TimeField
-	b := ms.Search(q.Interval)
+	b := ms.Search(q.Interval, q.TimeRange)
 	b.Size(0)
 	filters := b.Query().Bool().Filter()
 	filters.AddDateRangeFilter(defaultTimeField, to, from, es.DateFormatEpochMS)
@@ -157,21 +182,26 @@ func addDateHistogramAgg(aggBuilder es.AggBuilder, bucketAgg *BucketAgg, timeFro
 		field = timeField
 	}
 	aggBuilder.DateHistogram(bucketAgg.ID, field, func(a *es.DateHistogramAgg, b es.AggBuilder) {
-		a.FixedInterval = bucketAgg.Settings.Get("interval").MustString("auto")
+		var interval = bucketAgg.Settings.Get("interval").MustString("auto")
+		if slices.Contains(es.GetCalendarIntervals(), interval) {
+			a.CalendarInterval = interval
+		} else {
+			if interval == "auto" {
+				// note this is not really a valid grafana-variable-handling,
+				// because normally this would not match `$__interval_ms`,
+				// but because how we apply these in the go-code, this will work
+				// correctly, and becomes something like `500ms`.
+				// a nicer way would be to use `${__interval_ms}ms`, but
+				// that format is not recognized where we apply these variables
+				// in the elasticsearch datasource
+				a.FixedInterval = "$__interval_msms"
+			} else {
+				a.FixedInterval = interval
+			}
+		}
 		a.MinDocCount = bucketAgg.Settings.Get("min_doc_count").MustInt(0)
 		a.ExtendedBounds = &es.ExtendedBounds{Min: timeFrom, Max: timeTo}
 		a.Format = bucketAgg.Settings.Get("format").MustString(es.DateFormatEpochMS)
-
-		if a.FixedInterval == "auto" {
-			// note this is not really a valid grafana-variable-handling,
-			// because normally this would not match `$__interval_ms`,
-			// but because how we apply these in the go-code, this will work
-			// correctly, and becomes something like `500ms`.
-			// a nicer way would be to use `${__interval_ms}ms`, but
-			// that format is not recognized where we apply these variables
-			// in the elasticsearch datasource
-			a.FixedInterval = "$__interval_msms"
-		}
 
 		if offset, err := bucketAgg.Settings.Get("offset").String(); err == nil {
 			a.Offset = offset
@@ -195,7 +225,7 @@ func addDateHistogramAgg(aggBuilder es.AggBuilder, bucketAgg *BucketAgg, timeFro
 
 func addHistogramAgg(aggBuilder es.AggBuilder, bucketAgg *BucketAgg) es.AggBuilder {
 	aggBuilder.Histogram(bucketAgg.ID, bucketAgg.Field, func(a *es.HistogramAgg, b es.AggBuilder) {
-		a.Interval = stringToIntWithDefaultValue(bucketAgg.Settings.Get("interval").MustString(), 1000)
+		a.Interval = stringToFloatWithDefaultValue(bucketAgg.Settings.Get("interval").MustString(), 1000)
 		a.MinDocCount = bucketAgg.Settings.Get("min_doc_count").MustInt(0)
 
 		if missing, err := bucketAgg.Settings.Get("missing").Int(); err == nil {
@@ -377,6 +407,11 @@ func processDocumentQuery(q *Query, b *es.SearchRequestBuilder, from, to int64, 
 	b.Sort(es.SortOrderDesc, defaultTimeField, "boolean")
 	b.Sort(es.SortOrderDesc, "_doc", "")
 	b.AddDocValueField(defaultTimeField)
+	if isRawDataQuery(q) {
+		// For raw_data queries we need to add timeField as field with standardized time format to not receive
+		// invalid formats that elasticsearch can parse, but our frontend can't (e.g. yyyy_MM_dd_HH_mm_ss)
+		b.AddTimeFieldWithStandardizedFormat(defaultTimeField)
+	}
 	b.Size(stringToIntWithDefaultValue(metric.Settings.Get("size").MustString(), defaultSize))
 }
 
@@ -475,6 +510,18 @@ func processTimeSeriesQuery(q *Query, b *es.SearchRequestBuilder, from, to int64
 
 func stringToIntWithDefaultValue(valueStr string, defaultValue int) int {
 	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		value = defaultValue
+	}
+	// In our case, 0 is not a valid value and in this case we default to defaultValue
+	if value == 0 {
+		value = defaultValue
+	}
+	return value
+}
+
+func stringToFloatWithDefaultValue(valueStr string, defaultValue float64) float64 {
+	value, err := strconv.ParseFloat(valueStr, 64)
 	if err != nil {
 		value = defaultValue
 	}

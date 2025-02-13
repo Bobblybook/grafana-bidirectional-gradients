@@ -1,11 +1,10 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
 import { selectors } from '@grafana/e2e-selectors';
 import { ToolbarButton, ButtonGroup } from '@grafana/ui';
 import { useDispatch, useSelector } from 'app/types';
 
-import { PanelModel } from '../../state';
+import { PanelModel } from '../../state/PanelModel';
 import { getPanelPluginWithFallback } from '../../state/selectors';
 
 import { updatePanelEditorUIState } from './state/actions';
@@ -65,11 +64,11 @@ export const VisualizationButton = ({ panel }: Props) => {
 VisualizationButton.displayName = 'VisualizationTab';
 
 const styles = {
-  wrapper: css`
-    display: flex;
-    flex-direction: column;
-  `,
-  vizButton: css`
-    text-align: left;
-  `,
+  wrapper: css({
+    display: 'flex',
+    flexDirection: 'column',
+  }),
+  vizButton: css({
+    textAlign: 'left',
+  }),
 };

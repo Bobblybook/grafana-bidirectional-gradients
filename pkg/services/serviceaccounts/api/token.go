@@ -132,7 +132,10 @@ func (api *ServiceAccountsAPI) CreateToken(c *contextmodel.ReqContext) response.
 	}
 
 	// confirm service account exists
-	if _, err = api.service.RetrieveServiceAccount(c.Req.Context(), c.SignedInUser.GetOrgID(), saID); err != nil {
+	if _, err = api.service.RetrieveServiceAccount(c.Req.Context(), &serviceaccounts.GetServiceAccountQuery{
+		OrgID: c.SignedInUser.GetOrgID(),
+		ID:    saID,
+	}); err != nil {
 		return response.ErrOrFallback(http.StatusInternalServerError, "Failed to retrieve service account", err)
 	}
 
@@ -205,7 +208,10 @@ func (api *ServiceAccountsAPI) DeleteToken(c *contextmodel.ReqContext) response.
 	}
 
 	// confirm service account exists
-	if _, err := api.service.RetrieveServiceAccount(c.Req.Context(), c.SignedInUser.GetOrgID(), saID); err != nil {
+	if _, err := api.service.RetrieveServiceAccount(c.Req.Context(), &serviceaccounts.GetServiceAccountQuery{
+		OrgID: c.SignedInUser.GetOrgID(),
+		ID:    saID,
+	}); err != nil {
 		return response.ErrOrFallback(http.StatusInternalServerError, "Failed to retrieve service account", err)
 	}
 
@@ -246,7 +252,7 @@ type DeleteTokenParams struct {
 // swagger:response listTokensResponse
 type ListTokensResponse struct {
 	// in:body
-	Body *TokenDTO
+	Body []TokenDTO
 }
 
 // swagger:response createTokenResponse

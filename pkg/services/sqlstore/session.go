@@ -9,12 +9,14 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"xorm.io/xorm"
 
+	"github.com/grafana/grafana/pkg/apimachinery/errutil"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/services/sqlstore/migrator"
-	"github.com/grafana/grafana/pkg/util/errutil"
 	"github.com/grafana/grafana/pkg/util/retryer"
 )
 
@@ -37,7 +39,7 @@ func (sess *DBSession) PublishAfterCommit(msg any) {
 	sess.events = append(sess.events, msg)
 }
 
-func startSessionOrUseExisting(ctx context.Context, engine *xorm.Engine, beginTran bool, tracer tracing.Tracer) (*DBSession, bool, tracing.Span, error) {
+func startSessionOrUseExisting(ctx context.Context, engine *xorm.Engine, beginTran bool, tracer tracing.Tracer) (*DBSession, bool, trace.Span, error) {
 	value := ctx.Value(ContextSessionKey{})
 	var sess *DBSession
 	sess, ok := value.(*DBSession)
@@ -46,11 +48,16 @@ func startSessionOrUseExisting(ctx context.Context, engine *xorm.Engine, beginTr
 		ctxLogger := sessionLogger.FromContext(ctx)
 		ctxLogger.Debug("reusing existing session", "transaction", sess.transactionOpen)
 		sess.Session = sess.Session.Context(ctx)
-		return sess, false, nil, nil
+
+		// This is a noop span to simplify later operations. purposefully not using existing context
+		_, span := noop.NewTracerProvider().Tracer("integrationtests").Start(ctx, "sqlstore.startSessionOrUseExisting")
+
+		return sess, false, span, nil
 	}
 
 	tctx, span := tracer.Start(ctx, "open session")
-	span.SetAttributes("transaction", beginTran, attribute.Key("transaction").Bool(beginTran))
+
+	span.SetAttributes(attribute.Bool("transaction", beginTran))
 
 	newSess := &DBSession{Session: engine.NewSession(), transactionOpen: beginTran}
 
@@ -71,15 +78,6 @@ func startSessionOrUseExisting(ctx context.Context, engine *xorm.Engine, beginTr
 // In case of sqlite3.ErrLocked or sqlite3.ErrBusy failure it will be retried at most five times before giving up.
 func (ss *SQLStore) WithDbSession(ctx context.Context, callback DBTransactionFunc) error {
 	return ss.withDbSession(ctx, ss.engine, callback)
-}
-
-// WithNewDbSession calls the callback with a new session that is closed upon completion.
-// In case of sqlite3.ErrLocked or sqlite3.ErrBusy failure it will be retried at most five times before giving up.
-func (ss *SQLStore) WithNewDbSession(ctx context.Context, callback DBTransactionFunc) error {
-	sess := &DBSession{Session: ss.engine.NewSession(), transactionOpen: false}
-	defer sess.Close()
-	retry := 0
-	return retryer.Retry(ss.retryOnLocks(ctx, callback, sess, retry), ss.dbCfg.QueryRetries, time.Millisecond*time.Duration(10), time.Second)
 }
 
 func (ss *SQLStore) retryOnLocks(ctx context.Context, callback DBTransactionFunc, sess *DBSession, retry int) func() (retryer.RetrySignal, error) {
@@ -111,16 +109,14 @@ func (ss *SQLStore) retryOnLocks(ctx context.Context, callback DBTransactionFunc
 
 func (ss *SQLStore) withDbSession(ctx context.Context, engine *xorm.Engine, callback DBTransactionFunc) error {
 	sess, isNew, span, err := startSessionOrUseExisting(ctx, engine, false, ss.tracer)
+	defer span.End()
+
 	if err != nil {
-		return err
+		return tracing.Errorf(span, "start session failed: %s", err)
 	}
+
 	if isNew {
-		defer func() {
-			if span != nil {
-				span.End()
-			}
-			sess.Close()
-		}()
+		defer sess.Close()
 	}
 	retry := 0
 	return retryer.Retry(ss.retryOnLocks(ctx, callback, sess, retry), ss.dbCfg.QueryRetries, time.Millisecond*time.Duration(10), time.Second)

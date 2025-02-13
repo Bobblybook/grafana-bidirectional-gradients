@@ -37,13 +37,19 @@ The uid can have a maximum length of 40 characters.
 
 Creates a new dashboard or updates an existing dashboard. When updating existing dashboards, if you do not define the `folderId` or the `folderUid` property, then the dashboard(s) are moved to the root level. (You need to define only one property, not both).
 
+> **Note:** This endpoint is not intended for creating folders, use `POST /api/folders` for that.
+
 **Required permissions**
 
 See note in the [introduction]({{< ref "#dashboard-api" >}}) for an explanation.
 
-| Action              | Scope       |
-| ------------------- | ----------- |
-| `dashboards:create` | `folders:*` |
+<!-- prettier-ignore-start -->
+| Action              | Scope                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `dashboards:create` | <ul><li>`folders:*`</li><li>`folders:uid:*`</li></ul>                                                   |
+| `dashboards:write`  | <ul><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Example Request for new dashboard**:
 
@@ -77,7 +83,7 @@ JSON Body schema:
 - **dashboard.refresh** - Set the dashboard refresh interval. If this is lower than [the minimum refresh interval]({{< relref "/docs/grafana/latest/setup-grafana/configure-grafana#min_refresh_interval" >}}), then Grafana will ignore it and will enforce the minimum refresh interval.
 - **folderId** – The id of the folder to save the dashboard in.
 - **folderUid** – The UID of the folder to save the dashboard in. Overrides the `folderId`.
-- **overwrite** – Set to true if you want to overwrite existing dashboard with newer version, same dashboard title in folder or same dashboard uid.
+- **overwrite** – Set to true if you want to overwrite an existing dashboard with a given dashboard UID.
 - **message** - Set a commit message for the version history.
 
 **Example Request for updating a dashboard**:
@@ -133,7 +139,6 @@ The **412** status code is used for explaining that you cannot create the dashbo
 There can be different reasons for this:
 
 - The dashboard has been changed by someone else, `status=version-mismatch`
-- A dashboard with the same name in the folder already exists, `status=name-exists`
 - A dashboard with the same uid already exists, `status=name-exists`
 - The dashboard belongs to plugin `<plugin title>`, `status=plugin-dashboard`
 
@@ -150,8 +155,6 @@ Content-Length: 97
 }
 ```
 
-In case of title already exists the `status` property will be `name-exists`.
-
 ## Get dashboard by uid
 
 `GET /api/dashboards/uid/:uid`
@@ -162,9 +165,12 @@ Will return the dashboard given the dashboard unique identifier (uid). Informati
 
 See note in the [introduction]({{< ref "#dashboard-api" >}}) for an explanation.
 
-| Action            | Scope          |
-| ----------------- | -------------- |
-| `dashboards:read` | `dashboards:*` |
+<!-- prettier-ignore-start -->
+| Action            | Scope                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
+| `dashboards:read` | <ul><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Example Request**:
 
@@ -218,9 +224,12 @@ Will delete the dashboard given the specified unique identifier (uid).
 
 See note in the [introduction]({{< ref "#dashboard-api" >}}) for an explanation.
 
-| Action              | Scope                         |
-| ------------------- | ----------------------------- |
-| `dashboards:delete` | `dashboards:*`<br>`folders:*` |
+<!-- prettier-ignore-start -->
+| Action              | Scope                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `dashboards:delete` | <ul><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
 
 **Example Request**:
 
@@ -250,6 +259,107 @@ Status Codes:
 - **401** – Unauthorized
 - **403** – Access denied
 - **404** – Not found
+
+## Hard delete dashboard by uid
+
+{{% admonition type="note" %}}
+This feature is currently in private preview and behind the `dashboardRestore` feature toggle.
+{{% /admonition %}}
+
+`DELETE /api/dashboards/uid/:uid/trash`
+
+Will delete permanently the dashboard given the specified unique identifier (uid).
+
+**Required permissions**
+
+See note in the [introduction]({{< ref "#dashboard-api" >}}) for an explanation.
+
+<!-- prettier-ignore-start -->
+| Action              | Scope                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `dashboards:delete` | <ul><li>`dashboards:*`</li><li>`dashboards:uid:*`</li><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
+
+**Example Request**:
+
+```http
+DELETE /api/dashboards/uid/cIBgcSjkk/trash HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer eyJrIjoiT0tTcG1pUlY2RnVKZTFVaDFsNFZXdE9ZWmNrMkZYbk
+```
+
+**Example Response**:
+
+```http
+HTTP/1.1 200
+Content-Type: application/json
+
+{
+  "title": "Production Overview",
+  "message": "Dashboard Production Overview deleted",
+  "uid": "cIBgcSjkk"
+}
+```
+
+Status Codes:
+
+- **200** – Deleted
+- **401** – Unauthorized
+- **403** – Access denied
+- **404** – Not found
+
+## Restore deleted dashboard by uid
+
+{{% admonition type="note" %}}
+This feature is currently in private preview and behind the `dashboardRestore` feature toggle.
+{{% /admonition %}}
+
+`PATCH /api/dashboards/uid/:uid/trash`
+
+Will restore a deleted dashboard given the specified unique identifier (uid).
+
+**Required permissions**
+
+See note in the [introduction]({{< ref "#dashboard-api" >}}) for an explanation.
+
+<!-- prettier-ignore-start -->
+| Action              | Scope                                                 |
+| ------------------- | ----------------------------------------------------- |
+| `dashboards:create` | <ul><li>`folders:*`</li><li>`folders:uid:*`</li></ul> |
+{ .no-spacing-list }
+<!-- prettier-ignore-end -->
+
+**Example Request**:
+
+```http
+PATCH /api/dashboards/uid/cIBgcSjkk/trash HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer eyJrIjoiT0tTcG1pUlY2RnVKZTFVaDFsNFZXdE9ZWmNrMkZYbk
+```
+
+**Example Response**:
+
+```http
+HTTP/1.1 200
+Content-Type: application/json
+
+{
+  "title": "Production Overview",
+  "message": "Dashboard Production Overview restored",
+  "uid": "cIBgcSjkk"
+}
+```
+
+Status Codes:
+
+- **200** – Deleted
+- **401** – Unauthorized
+- **403** – Access denied
+- **404** – Not found
+-
 
 ## Gets the home dashboard
 

@@ -9,7 +9,7 @@ type AlertConfiguration struct {
 	AlertmanagerConfiguration string
 	ConfigurationHash         string
 	ConfigurationVersion      string
-	CreatedAt                 int64 `xorm:"created"`
+	CreatedAt                 int64 `xorm:"created_at"`
 	Default                   bool
 	OrgID                     int64 `xorm:"org_id"`
 }
@@ -22,11 +22,6 @@ type HistoricAlertConfiguration struct {
 	// LastApplied a timestamp indicating the most recent time at which the configuration was applied to an Alertmanager, or 0 otherwise.
 	// Only set this field if the configuration has been applied by the caller.
 	LastApplied int64 `xorm:"last_applied"`
-}
-
-// GetLatestAlertmanagerConfigurationQuery is the query to get the latest alertmanager configuration.
-type GetLatestAlertmanagerConfigurationQuery struct {
-	OrgID int64
 }
 
 // SaveAlertmanagerConfigurationCmd is the command to save an alertmanager configuration.

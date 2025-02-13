@@ -1,6 +1,6 @@
 import { css } from '@emotion/css';
 import cx from 'classnames';
-import React, { MouseEvent, memo } from 'react';
+import { MouseEvent, memo } from 'react';
 import tinycolor from 'tinycolor2';
 
 import { Field, getFieldColorModeForField, GrafanaTheme2 } from '@grafana/data';
@@ -10,61 +10,70 @@ import { HoverState } from './NodeGraph';
 import { NodeDatum } from './types';
 import { statToString } from './utils';
 
-const nodeR = 40;
+export const nodeR = 40;
+export const highlightedNodeColor = '#a00';
 
 const getStyles = (theme: GrafanaTheme2, hovering: HoverState) => ({
-  mainGroup: css`
-    cursor: pointer;
-    font-size: 10px;
-    transition: opacity 300ms;
-    opacity: ${hovering === 'inactive' ? 0.5 : 1};
-  `,
+  mainGroup: css({
+    cursor: 'pointer',
+    fontSize: '10px',
+    [theme.transitions.handleMotion('no-preference', 'reduce')]: {
+      transition: 'opacity 300ms',
+    },
+    opacity: hovering === 'inactive' ? 0.5 : 1,
+  }),
 
-  mainCircle: css`
-    fill: ${theme.components.panel.background};
-  `,
+  mainCircle: css({
+    fill: theme.components.panel.background,
+  }),
 
-  hoverCircle: css`
-    opacity: 0.5;
-    fill: transparent;
-    stroke: ${theme.colors.primary.text};
-  `,
+  filledCircle: css({
+    fill: highlightedNodeColor,
+  }),
 
-  text: css`
-    fill: ${theme.colors.text.primary};
-    pointer-events: none;
-  `,
+  hoverCircle: css({
+    opacity: 0.5,
+    fill: 'transparent',
+    stroke: theme.colors.primary.text,
+  }),
 
-  titleText: css`
-    text-align: center;
-    text-overflow: ellipsis;
-    overflow: hidden;
-    white-space: nowrap;
-    background-color: ${tinycolor(theme.colors.background.primary).setAlpha(0.6).toHex8String()};
-    width: 140px;
-  `,
+  text: css({
+    fill: theme.colors.text.primary,
+    pointerEvents: 'none',
+  }),
 
-  statsText: css`
-    text-align: center;
-    text-overflow: ellipsis;
-    overflow: hidden;
-    white-space: nowrap;
-    width: 70px;
-  `,
+  titleText: css({
+    textAlign: 'center',
+    textOverflow: 'ellipsis',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    backgroundColor: tinycolor(theme.colors.background.primary).setAlpha(0.6).toHex8String(),
+    width: '140px',
+  }),
 
-  textHovering: css`
-    width: 200px;
-    & span {
-      background-color: ${tinycolor(theme.colors.background.primary).setAlpha(0.8).toHex8String()};
-    }
-  `,
+  statsText: css({
+    textAlign: 'center',
+    textOverflow: 'ellipsis',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    width: '70px',
+  }),
 
-  clickTarget: css`
-    fill: none;
-    stroke: none;
-    pointer-events: fill;
-  `,
+  textHovering: css({
+    width: '200px',
+    '& span': {
+      backgroundColor: tinycolor(theme.colors.background.primary).setAlpha(0.8).toHex8String(),
+    },
+  }),
+
+  clickTarget: css({
+    fill: 'none',
+    stroke: 'none',
+    pointerEvents: 'fill',
+  }),
 });
+
+export const computeNodeCircumferenceStrokeWidth = (nodeRadius: number) => Math.ceil(nodeRadius * 0.075);
 
 export const Node = memo(function Node(props: {
   node: NodeDatum;
@@ -77,6 +86,8 @@ export const Node = memo(function Node(props: {
   const theme = useTheme2();
   const styles = getStyles(theme, hovering);
   const isHovered = hovering === 'active';
+  const nodeRadius = node.nodeRadius?.values[node.dataFrameRowIndex] || nodeR;
+  const strokeWidth = computeNodeCircumferenceStrokeWidth(nodeRadius);
 
   if (!(node.x !== undefined && node.y !== undefined)) {
     return null;
@@ -84,14 +95,22 @@ export const Node = memo(function Node(props: {
 
   return (
     <g data-node-id={node.id} className={styles.mainGroup} aria-label={`Node: ${node.title}`}>
-      <circle className={styles.mainCircle} r={nodeR} cx={node.x} cy={node.y} />
-      {isHovered && <circle className={styles.hoverCircle} r={nodeR - 3} cx={node.x} cy={node.y} strokeWidth={2} />}
+      <circle
+        data-testid={`node-circle-${node.id}`}
+        className={node.highlighted ? styles.filledCircle : styles.mainCircle}
+        r={nodeRadius}
+        cx={node.x}
+        cy={node.y}
+      />
+      {isHovered && (
+        <circle className={styles.hoverCircle} r={nodeRadius - 3} cx={node.x} cy={node.y} strokeWidth={strokeWidth} />
+      )}
       <ColorCircle node={node} />
       <g className={styles.text} style={{ pointerEvents: 'none' }}>
         <NodeContents node={node} hovering={hovering} />
         <foreignObject
           x={node.x - (isHovered ? 100 : 70)}
-          y={node.y + nodeR + 5}
+          y={node.y + nodeRadius + 5}
           width={isHovered ? '200' : '140'}
           height="40"
         >
@@ -114,10 +133,10 @@ export const Node = memo(function Node(props: {
           onClick(event, node);
         }}
         className={styles.clickTarget}
-        x={node.x - nodeR - 5}
-        y={node.y - nodeR - 5}
-        width={nodeR * 2 + 10}
-        height={nodeR * 2 + 50}
+        x={node.x - nodeRadius - 5}
+        y={node.y - nodeRadius - 5}
+        width={nodeRadius * 2 + 10}
+        height={nodeRadius * 2 + 50}
       />
     </g>
   );
@@ -162,15 +181,17 @@ function ColorCircle(props: { node: NodeDatum }) {
   const { node } = props;
   const fullStat = node.arcSections.find((s) => s.values[node.dataFrameRowIndex] >= 1);
   const theme = useTheme2();
+  const nodeRadius = node.nodeRadius?.values[node.dataFrameRowIndex] || nodeR;
+  const strokeWidth = computeNodeCircumferenceStrokeWidth(nodeRadius);
 
   if (fullStat) {
-    // Doing arc with path does not work well so it's better to just do a circle in that case
+    // Drawing a full circle with a `path` tag does not work well, it's better to use a `circle` tag in that case
     return (
       <circle
         fill="none"
         stroke={theme.visualization.getColorByName(fullStat.config.color?.fixedColor || '')}
-        strokeWidth={2}
-        r={nodeR}
+        strokeWidth={strokeWidth}
+        r={nodeRadius}
         cx={node.x}
         cy={node.y}
       />
@@ -184,8 +205,8 @@ function ColorCircle(props: { node: NodeDatum }) {
       <circle
         fill="none"
         stroke={node.color ? getColor(node.color, node.dataFrameRowIndex, theme) : 'gray'}
-        strokeWidth={2}
-        r={nodeR}
+        strokeWidth={strokeWidth}
+        r={nodeRadius}
         cx={node.x}
         cy={node.y}
       />
@@ -203,7 +224,7 @@ function ColorCircle(props: { node: NodeDatum }) {
       const el = (
         <ArcSection
           key={index}
-          r={nodeR}
+          r={nodeRadius}
           x={node.x!}
           y={node.y!}
           startPercent={acc.percent}
@@ -215,7 +236,7 @@ function ColorCircle(props: { node: NodeDatum }) {
               : value
           }
           color={theme.visualization.getColorByName(color)}
-          strokeWidth={2}
+          strokeWidth={strokeWidth}
         />
       );
       acc.elements.push(el);

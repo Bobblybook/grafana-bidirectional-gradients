@@ -1,12 +1,15 @@
 import { action } from '@storybook/addon-actions';
 import { Meta, StoryFn } from '@storybook/react';
-import React, { useState } from 'react';
+import { useState } from 'react';
+import * as React from 'react';
 import { AsyncState } from 'react-use/lib/useAsync';
 
 import { SelectableValue } from '@grafana/data';
-import { SegmentAsync, Icon, SegmentSection } from '@grafana/ui';
 
-import { SegmentAsyncProps } from './SegmentAsync';
+import { Icon } from '../Icon/Icon';
+
+import { SegmentAsync, SegmentAsyncProps } from './SegmentAsync';
+import { SegmentSection } from './SegmentSection';
 
 const AddButton = (
   <span className="gf-form-label query-part">
@@ -22,14 +25,20 @@ const loadOptions = <T,>(options: T): Promise<T> => new Promise((res) => setTime
 const loadOptionsErr = (): Promise<Array<SelectableValue<string>>> =>
   new Promise((_, rej) => setTimeout(() => rej(Error('Could not find data')), 2000));
 
-const SegmentFrame = ({ loadOptions, children }: any) => (
+const SegmentFrame = ({
+  loadOptions,
+  children,
+}: React.PropsWithChildren<{
+  loadOptions: (options: Array<SelectableValue<string>>) => Promise<Array<SelectableValue<string>>>;
+}>) => (
   <>
-    <SegmentSection label="Segment Name">
+    <SegmentSection label="Segment">
       {children}
       <SegmentAsync
         Component={AddButton}
         onChange={(value) => action('New value added')(value)}
         loadOptions={() => loadOptions(options)}
+        inputMinWidth={100}
       />
     </SegmentSection>
   </>

@@ -4,7 +4,7 @@ import { Geometry } from 'ol/geom';
 import { DataFrame, Field, FieldType, getFieldTypeFromValue } from '@grafana/data';
 
 interface FieldInfo {
-  values: any[];
+  values: Array<string | number | null | undefined>;
   types: Set<FieldType>;
   count: number;
 }
@@ -122,5 +122,5 @@ function ensureSingleType(info: FieldInfo): FieldType {
     });
     return FieldType.string;
   }
-  return info.types.values().next().value;
+  return info.types.values().next().value ?? FieldType.other;
 }

@@ -117,7 +117,7 @@ func TestMiddlewareContext(t *testing.T) {
 		assert.Empty(t, sc.resp.Header().Get("Expires"))
 	})
 
-	middlewareScenario(t, "middleware should pass cache-control on resources with private cache control", func(t *testing.T, sc *scenarioContext) {
+	middlewareScenario(t, "middleware should pass cache-control on datasource resources with private cache control", func(t *testing.T, sc *scenarioContext) {
 		sc = sc.fakeReq("GET", "/api/datasources/1/resources/foo")
 		sc.resp.Header().Add("Cache-Control", "private, max-age=86400")
 		sc.resp.Header().Add("X-Grafana-Cache", "true")
@@ -125,8 +125,24 @@ func TestMiddlewareContext(t *testing.T) {
 		assert.Equal(t, "private, max-age=86400", sc.resp.Header().Get("Cache-Control"))
 	})
 
-	middlewareScenario(t, "middleware should not pass cache-control on resources with public cache control", func(t *testing.T, sc *scenarioContext) {
+	middlewareScenario(t, "middleware should not pass cache-control on datasource resources with public cache control", func(t *testing.T, sc *scenarioContext) {
 		sc = sc.fakeReq("GET", "/api/datasources/1/resources/foo")
+		sc.resp.Header().Add("Cache-Control", "public, max-age=86400, private")
+		sc.resp.Header().Add("X-Grafana-Cache", "true")
+		sc.exec()
+		assert.Equal(t, noStore, sc.resp.Header().Get("Cache-Control"))
+	})
+
+	middlewareScenario(t, "middleware should pass cache-control on plugins resources with private cache control", func(t *testing.T, sc *scenarioContext) {
+		sc = sc.fakeReq("GET", "/api/plugins/1/resources/foo")
+		sc.resp.Header().Add("Cache-Control", "private, max-age=86400")
+		sc.resp.Header().Add("X-Grafana-Cache", "true")
+		sc.exec()
+		assert.Equal(t, "private, max-age=86400", sc.resp.Header().Get("Cache-Control"))
+	})
+
+	middlewareScenario(t, "middleware should not pass cache-control on plugins resources with public cache control", func(t *testing.T, sc *scenarioContext) {
+		sc = sc.fakeReq("GET", "/api/plugins/1/resources/foo")
 		sc.resp.Header().Add("Cache-Control", "public, max-age=86400, private")
 		sc.resp.Header().Add("X-Grafana-Cache", "true")
 		sc.exec()
@@ -149,9 +165,14 @@ func TestMiddlewareContext(t *testing.T) {
 				User:     &dtos.CurrentUser{},
 				Settings: &dtos.FrontendSettingsDTO{},
 				NavTree:  &navtree.NavTreeRoot{},
+				Assets: &dtos.EntryPointAssets{
+					JSFiles: []dtos.EntryPointAsset{},
+					Dark:    "dark.css",
+					Light:   "light.css",
+				},
 			}
 			t.Log("Calling HTML", "data", data)
-			c.HTML(http.StatusOK, "index-template", data)
+			c.HTML(http.StatusOK, "index", data)
 			t.Log("Returned HTML with code 200")
 		}
 		sc.fakeReq("GET", "/").exec()
@@ -185,6 +206,22 @@ func TestMiddlewareContext(t *testing.T) {
 			"X-Other-Header":  "other-test",
 		}
 	})
+
+	middlewareScenario(t, "middleware should not add Cache-Control header for requests to render pdf", func(
+		t *testing.T, sc *scenarioContext) {
+		sc.fakeReq("GET", "/api/reports/render/pdf/").exec()
+		assert.Empty(t, sc.resp.Header().Get("Cache-Control"))
+		assert.Empty(t, sc.resp.Header().Get("Pragma"))
+		assert.Empty(t, sc.resp.Header().Get("Expires"))
+	})
+
+	middlewareScenario(t, "middleware should not add Cache-Control header for requests to render panel as image", func(
+		t *testing.T, sc *scenarioContext) {
+		sc.fakeReq("GET", "/render/d-solo/").exec()
+		assert.Empty(t, sc.resp.Header().Get("Cache-Control"))
+		assert.Empty(t, sc.resp.Header().Get("Pragma"))
+		assert.Empty(t, sc.resp.Header().Get("Expires"))
+	})
 }
 
 func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(*setting.Cfg)) {
@@ -199,7 +236,7 @@ func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(
 		cfg.LoginCookieName = "grafana_session"
 		cfg.LoginMaxLifetime = loginMaxLifetime
 		// Required when rendering errors
-		cfg.ErrTemplateName = "error-template"
+		cfg.ErrTemplateName = "error"
 		for _, cb := range cbs {
 			cb(cfg)
 		}
@@ -224,6 +261,8 @@ func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(
 		ctxHdlr := getContextHandler(t, cfg, sc.authnService)
 		sc.m.Use(ctxHdlr.Middleware)
 		sc.m.Use(OrgRedirect(sc.cfg, sc.userService))
+		// handle action urls
+		sc.m.Use(ValidateActionUrl(sc.cfg, logger))
 
 		sc.defaultHandler = func(c *contextmodel.ReqContext) {
 			require.NotNil(t, c)
@@ -251,6 +290,6 @@ func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(
 func getContextHandler(t *testing.T, cfg *setting.Cfg, authnService authn.Service) *contexthandler.ContextHandler {
 	t.Helper()
 
-	tracer := tracing.NewFakeTracer()
-	return contexthandler.ProvideService(cfg, tracer, featuremgmt.WithFeatures(), authnService)
+	tracer := tracing.InitializeTracerForTest()
+	return contexthandler.ProvideService(cfg, tracer, authnService, featuremgmt.WithFeatures())
 }

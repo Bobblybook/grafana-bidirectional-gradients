@@ -7,13 +7,15 @@ import (
 	"net/http"
 	"strconv"
 
+	claims "github.com/grafana/authlib/types"
 	"github.com/grafana/grafana/pkg/api/dtos"
 	"github.com/grafana/grafana/pkg/api/response"
 	"github.com/grafana/grafana/pkg/services/accesscontrol"
+	"github.com/grafana/grafana/pkg/services/authn"
 	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
-	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/login"
 	"github.com/grafana/grafana/pkg/services/org"
+	"github.com/grafana/grafana/pkg/services/searchusers/sortopts"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/util"
 	"github.com/grafana/grafana/pkg/web"
@@ -124,7 +126,7 @@ func (hs *HTTPServer) GetOrgUsersForCurrentOrg(c *contextmodel.ReqContext) respo
 	})
 
 	if err != nil {
-		return response.Error(500, "Failed to get users for current organization", err)
+		return response.Error(http.StatusInternalServerError, "Failed to get users for current organization", err)
 	}
 
 	return response.JSON(http.StatusOK, result.OrgUsers)
@@ -154,13 +156,14 @@ func (hs *HTTPServer) GetOrgUsersForCurrentOrgLookup(c *contextmodel.ReqContext)
 	})
 
 	if err != nil {
-		return response.Error(500, "Failed to get users for current organization", err)
+		return response.Error(http.StatusInternalServerError, "Failed to get users for current organization", err)
 	}
 
 	result := make([]*dtos.UserLookupDTO, 0)
 
 	for _, u := range orgUsersResult.OrgUsers {
 		result = append(result, &dtos.UserLookupDTO{
+			UID:       u.UID,
 			UserID:    u.UserID,
 			Login:     u.Login,
 			AvatarURL: u.AvatarURL,
@@ -199,7 +202,7 @@ func (hs *HTTPServer) GetOrgUsers(c *contextmodel.ReqContext) response.Response 
 	})
 
 	if err != nil {
-		return response.Error(500, "Failed to get users for organization", err)
+		return response.Error(http.StatusInternalServerError, "Failed to get users for organization", err)
 	}
 
 	return response.JSON(http.StatusOK, result.OrgUsers)
@@ -236,16 +239,22 @@ func (hs *HTTPServer) SearchOrgUsers(c *contextmodel.ReqContext) response.Respon
 		page = 1
 	}
 
+	sortOpts, err := sortopts.ParseSortQueryParam(c.Query("sort"))
+	if err != nil {
+		return response.Err(err)
+	}
+
 	result, err := hs.searchOrgUsersHelper(c, &org.SearchOrgUsersQuery{
-		OrgID: orgID,
-		Query: c.Query("query"),
-		Page:  page,
-		Limit: perPage,
-		User:  c.SignedInUser,
+		OrgID:    orgID,
+		Query:    c.Query("query"),
+		Page:     page,
+		Limit:    perPage,
+		User:     c.SignedInUser,
+		SortOpts: sortOpts,
 	})
 
 	if err != nil {
-		return response.Error(500, "Failed to get users for organization", err)
+		return response.Error(http.StatusInternalServerError, "Failed to get users for organization", err)
 	}
 
 	return response.JSON(http.StatusOK, result)
@@ -264,17 +273,23 @@ func (hs *HTTPServer) SearchOrgUsersWithPaging(c *contextmodel.ReqContext) respo
 		page = 1
 	}
 
+	sortOpts, err := sortopts.ParseSortQueryParam(c.Query("sort"))
+	if err != nil {
+		return response.Err(err)
+	}
+
 	query := &org.SearchOrgUsersQuery{
-		OrgID: c.SignedInUser.GetOrgID(),
-		Query: c.Query("query"),
-		Page:  page,
-		Limit: perPage,
-		User:  c.SignedInUser,
+		OrgID:    c.SignedInUser.GetOrgID(),
+		Query:    c.Query("query"),
+		Page:     page,
+		Limit:    perPage,
+		User:     c.SignedInUser,
+		SortOpts: sortOpts,
 	}
 
 	result, err := hs.searchOrgUsersHelper(c, query)
 	if err != nil {
-		return response.Error(500, "Failed to get users for current organization", err)
+		return response.Error(http.StatusInternalServerError, "Failed to get users for current organization", err)
 	}
 
 	return response.JSON(http.StatusOK, result)
@@ -293,7 +308,7 @@ func (hs *HTTPServer) searchOrgUsersHelper(c *contextmodel.ReqContext, query *or
 		if dtos.IsHiddenUser(user.Login, c.SignedInUser, hs.Cfg) {
 			continue
 		}
-		user.AvatarURL = dtos.GetGravatarUrl(user.Email)
+		user.AvatarURL = dtos.GetGravatarUrl(hs.Cfg, user.Email)
 
 		userIDs[fmt.Sprint(user.UserID)] = true
 		authLabelsUserIDs = append(authLabelsUserIDs, user.UserID)
@@ -311,19 +326,23 @@ func (hs *HTTPServer) searchOrgUsersHelper(c *contextmodel.ReqContext, query *or
 
 	// Get accesscontrol metadata and IPD labels for users in the target org
 	accessControlMetadata := map[string]accesscontrol.Metadata{}
-	if c.QueryBool("accesscontrol") && c.SignedInUser.Permissions != nil {
-		// TODO https://github.com/grafana/grafana-authnz-team/issues/268 - user access control service for fetching permissions from another organization
-		permissions, ok := c.SignedInUser.Permissions[query.OrgID]
-		if ok {
-			accessControlMetadata = accesscontrol.GetResourcesMetadata(c.Req.Context(), permissions, "users:id:", userIDs)
+	if c.QueryBool("accesscontrol") {
+		permissions := c.SignedInUser.GetPermissions()
+		if query.OrgID != c.SignedInUser.GetOrgID() {
+			identity, err := hs.authnService.ResolveIdentity(c.Req.Context(), query.OrgID, c.SignedInUser.GetID())
+			if err != nil {
+				return nil, err
+			}
+			permissions = identity.GetPermissions()
 		}
+		accessControlMetadata = accesscontrol.GetResourcesMetadata(c.Req.Context(), permissions, "users:id:", userIDs)
 	}
 
 	for i := range filteredUsers {
 		filteredUsers[i].AccessControl = accessControlMetadata[fmt.Sprint(filteredUsers[i].UserID)]
 		if module, ok := modules[filteredUsers[i].UserID]; ok {
 			filteredUsers[i].AuthLabels = []string{login.GetAuthProviderLabel(module)}
-			filteredUsers[i].IsExternallySynced = login.IsExternallySynced(hs.Cfg, module)
+			filteredUsers[i].IsExternallySynced = hs.isExternallySynced(hs.Cfg, module)
 		}
 	}
 
@@ -409,12 +428,14 @@ func (hs *HTTPServer) updateOrgUserHelper(c *contextmodel.ReqContext, cmd org.Up
 			return response.Error(http.StatusInternalServerError, "Failed to get user auth info", nil)
 		}
 	}
-	if authInfo != nil && authInfo.AuthModule != "" && login.IsExternallySynced(hs.Cfg, authInfo.AuthModule) {
-		// A GCom specific feature toggle for role locking has been introduced, as the previous implementation had a bug with locking down external users synced through GCom (https://github.com/grafana/grafana/pull/72044)
-		// Remove this conditional once FlagGcomOnlyExternalOrgRoleSync feature toggle has been removed
-		if authInfo.AuthModule != login.GrafanaComAuthModule || hs.Features.IsEnabled(featuremgmt.FlagGcomOnlyExternalOrgRoleSync) {
+	if authInfo != nil && authInfo.AuthModule != "" {
+		if hs.isExternallySynced(hs.Cfg, authInfo.AuthModule) {
 			return response.Err(org.ErrCannotChangeRoleForExternallySyncedUser.Errorf("Cannot change role for externally synced user"))
 		}
+	}
+
+	if err := hs.idService.RemoveIDToken(c.Req.Context(), &authn.Identity{ID: strconv.FormatInt(cmd.UserID, 10), Type: claims.TypeUser, OrgID: cmd.OrgID}); err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to invalidate the ID token cache", err)
 	}
 
 	if err := hs.orgService.UpdateOrgUser(c.Req.Context(), &cmd); err != nil {
@@ -489,9 +510,9 @@ func (hs *HTTPServer) RemoveOrgUser(c *contextmodel.ReqContext) response.Respons
 func (hs *HTTPServer) removeOrgUserHelper(ctx context.Context, cmd *org.RemoveOrgUserCommand) response.Response {
 	if err := hs.orgService.RemoveOrgUser(ctx, cmd); err != nil {
 		if errors.Is(err, org.ErrLastOrgAdmin) {
-			return response.Error(400, "Cannot remove last organization admin", nil)
+			return response.Error(http.StatusBadRequest, "Cannot remove last organization admin", nil)
 		}
-		return response.Error(500, "Failed to remove user from organization", err)
+		return response.Error(http.StatusInternalServerError, "Failed to remove user from organization", err)
 	}
 
 	if cmd.UserWasDeleted {

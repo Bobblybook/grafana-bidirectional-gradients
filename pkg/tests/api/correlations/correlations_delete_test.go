@@ -106,7 +106,6 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "Data source not found", response.Message)
-		require.Equal(t, correlations.ErrSourceDataSourceDoesNotExists.Error(), response.Error)
 
 		require.NoError(t, res.Body.Close())
 	})
@@ -126,7 +125,6 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "Correlation not found", response.Message)
-		require.Equal(t, correlations.ErrCorrelationNotFound.Error(), response.Error)
 
 		require.NoError(t, res.Body.Close())
 	})
@@ -137,6 +135,7 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 			TargetUID:   &writableDs,
 			OrgId:       writableDsOrgId,
 			Provisioned: true,
+			Type:        correlations.CorrelationType("query"),
 		})
 
 		res := ctx.Delete(DeleteParams{
@@ -153,7 +152,6 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "Correlation can only be edited via provisioning", response.Message)
-		require.Equal(t, correlations.ErrCorrelationReadOnly.Error(), response.Error)
 
 		require.NoError(t, res.Body.Close())
 	})
@@ -163,6 +161,7 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 			SourceUID: writableDs,
 			TargetUID: &writableDs,
 			OrgId:     writableDsOrgId,
+			Type:      correlations.CorrelationType("query"),
 		})
 
 		res := ctx.Delete(DeleteParams{
@@ -195,6 +194,7 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 			SourceUID: writableDs,
 			TargetUID: &readOnlyDS,
 			OrgId:     writableDsOrgId,
+			Type:      correlations.CorrelationType("query"),
 		})
 
 		res := ctx.Delete(DeleteParams{
@@ -228,6 +228,7 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 			TargetUID:   &readOnlyDS,
 			OrgId:       writableDsOrgId,
 			Provisioned: false,
+			Type:        correlations.CorrelationType("query"),
 		})
 
 		ctx.createCorrelation(correlations.CreateCorrelationCommand{
@@ -235,6 +236,7 @@ func TestIntegrationDeleteCorrelation(t *testing.T) {
 			TargetUID:   &readOnlyDS,
 			OrgId:       writableDsOrgId,
 			Provisioned: true,
+			Type:        correlations.CorrelationType("query"),
 		})
 
 		res := ctx.Delete(DeleteParams{

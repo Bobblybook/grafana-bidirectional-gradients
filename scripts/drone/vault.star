@@ -1,20 +1,28 @@
 """
 This module returns functions for generating Drone secrets fetched from Vault.
 """
-pull_secret = "dockerconfigjson"
+gcr_pull_secret = "gcr"
+gar_pull_secret = "gar"
 drone_token = "drone_token"
 prerelease_bucket = "prerelease_bucket"
 gcp_upload_artifacts_key = "gcp_upload_artifacts_key"
 gcp_grafanauploads = "gcp_grafanauploads"
 gcp_grafanauploads_base64 = "gcp_grafanauploads_base64"
 gcp_download_build_container_assets_key = "gcp_download_build_container_assets_key"
+
 azure_sp_app_id = "azure_sp_app_id"
 azure_sp_app_pw = "azure_sp_app_pw"
 azure_tenant = "azure_tenant"
 
+github_app_app_id = "github-app-app-id"
+github_app_app_installation_id = "github-app-installation-id"
+github_app_private_key = "github-app-private-key"
+
 rgm_gcp_key_base64 = "gcp_key_base64"
 rgm_destination = "destination"
-rgm_github_token = "github_token"
+rgm_storybook_destination = "rgm_storybook_destination"
+rgm_cdn_destination = "rgm_cdn_destination"
+rgm_downloads_destination = "rgm_downloads_destination"
 rgm_dagger_token = "dagger_token"
 
 docker_username = "docker_username"
@@ -37,11 +45,14 @@ def vault_secret(name, path, key):
 
 def secrets():
     return [
+        vault_secret(github_app_app_id, "ci/data/repo/grafana/grafana/github-app", "app-id"),
+        vault_secret(github_app_app_installation_id, "ci/data/repo/grafana/grafana/github-app", "app-installation-id"),
+        vault_secret(github_app_private_key, "ci/data/repo/grafana/grafana/github-app", "private-key"),
         vault_secret(gcp_grafanauploads, "infra/data/ci/grafana-release-eng/grafanauploads", "credentials.json"),
         vault_secret(gcp_grafanauploads_base64, "infra/data/ci/grafana-release-eng/grafanauploads", "credentials_base64"),
         vault_secret("grafana_api_key", "infra/data/ci/grafana-release-eng/grafanacom", "api_key"),
-        vault_secret(pull_secret, "secret/data/common/gcr", ".dockerconfigjson"),
-        vault_secret("github_token", "infra/data/ci/github/grafanabot", "pat"),
+        vault_secret(gcr_pull_secret, "secret/data/common/gcr", ".dockerconfigjson"),
+        vault_secret(gar_pull_secret, "secret/data/common/gar", ".dockerconfigjson"),
         vault_secret(drone_token, "infra/data/ci/drone", "machine-user-token"),
         vault_secret(prerelease_bucket, "infra/data/ci/grafana/prerelease", "bucket"),
         vault_secret(docker_username, "infra/data/ci/grafanaci-docker-hub", "username"),
@@ -121,6 +132,21 @@ def secrets():
             rgm_destination,
             "infra/data/ci/grafana-release-eng/rgm",
             "destination_prod",
+        ),
+        vault_secret(
+            rgm_storybook_destination,
+            "infra/data/ci/grafana-release-eng/rgm",
+            "storybook_destination",
+        ),
+        vault_secret(
+            rgm_cdn_destination,
+            "infra/data/ci/grafana-release-eng/rgm",
+            "cdn_destination",
+        ),
+        vault_secret(
+            rgm_downloads_destination,
+            "infra/data/ci/grafana-release-eng/rgm",
+            "downloads_destination",
         ),
         vault_secret(
             rgm_dagger_token,

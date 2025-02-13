@@ -1,10 +1,11 @@
 import { css } from '@emotion/css';
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAsync, useLatest } from 'react-use';
 
+import { GrafanaTheme2 } from '@grafana/data';
 import { CodeEditor, Monaco, useStyles2, monacoTypes } from '@grafana/ui';
 
-import { languageDefinition } from '../phlareql';
+import { languageDefinition } from '../pyroscopeql';
 
 import { CompletionProvider } from './autocomplete';
 
@@ -32,7 +33,7 @@ export function LabelsEditor(props: Props) {
       <CodeEditor
         value={props.value}
         language={langId}
-        onBlur={props.onChange}
+        onChange={props.onChange}
         containerStyles={styles.queryField}
         monacoOptions={{
           folding: false,
@@ -53,7 +54,7 @@ export function LabelsEditor(props: Props) {
             bottom: 5,
           },
         }}
-        onBeforeEditorMount={ensurePhlareQL}
+        onBeforeEditorMount={ensurePyroscopeQL}
         onEditorDidMount={(editor, monaco) => {
           setupAutocompleteFn(editor, monaco);
 
@@ -125,12 +126,12 @@ function useAutocomplete(getLabelValues: (label: string) => Promise<string[]>, l
 }
 
 // we must only run the setup code once
-let phlareqlSetupDone = false;
-const langId = 'phlareql';
+let pyroscopeqlSetupDone = false;
+const langId = 'pyroscopeql';
 
-function ensurePhlareQL(monaco: Monaco) {
-  if (phlareqlSetupDone === false) {
-    phlareqlSetupDone = true;
+function ensurePyroscopeQL(monaco: Monaco) {
+  if (pyroscopeqlSetupDone === false) {
+    pyroscopeqlSetupDone = true;
     const { aliases, extensions, mimetypes, def } = languageDefinition;
     monaco.languages.register({ id: langId, aliases, extensions, mimetypes });
     monaco.languages.setMonarchTokensProvider(langId, def.language);
@@ -138,22 +139,22 @@ function ensurePhlareQL(monaco: Monaco) {
   }
 }
 
-const getStyles = () => {
+const getStyles = (theme: GrafanaTheme2) => {
   return {
-    queryField: css`
-      label: LabelsEditorQueryField;
-      flex: 1;
+    queryField: css({
+      label: 'LabelsEditorQueryField',
+      flex: 1,
       // Not exactly sure but without this the editor does not shrink after resizing (so you can make it bigger but not
       // smaller). At the same time this does not actually make the editor 100px because it has flex 1 so I assume
       // this should sort of act as a flex-basis (but flex-basis does not work for this). So yeah CSS magic.
-      width: 100px;
-    `,
-    wrapper: css`
-      label: LabelsEditorWrapper;
-      display: flex;
-      flex: 1;
-      border: 1px solid rgba(36, 41, 46, 0.3);
-      border-radius: 2px;
-    `,
+      width: '100px',
+    }),
+    wrapper: css({
+      label: 'LabelsEditorWrapper',
+      display: 'flex',
+      flex: 1,
+      border: '1px solid rgba(36, 41, 46, 0.3)',
+      borderRadius: theme.shape.radius.default,
+    }),
   };
 };

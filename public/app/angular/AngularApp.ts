@@ -7,25 +7,31 @@ import 'vendor/bootstrap/bootstrap';
 import angular from 'angular'; // eslint-disable-line no-duplicate-imports
 import { extend } from 'lodash';
 
-import { getTemplateSrv, SystemJS } from '@grafana/runtime';
+import { getTemplateSrv } from '@grafana/runtime';
 import { coreModule, angularModules } from 'app/angular/core_module';
 import appEvents from 'app/core/app_events';
 import { config } from 'app/core/config';
 import { contextSrv } from 'app/core/services/context_srv';
 import { DashboardLoaderSrv } from 'app/features/dashboard/services/DashboardLoaderSrv';
 import { getTimeSrv } from 'app/features/dashboard/services/TimeSrv';
+import { setAngularPanelReactWrapper } from 'app/features/plugins/importPanelPlugin';
+import { SystemJS } from 'app/features/plugins/loader/systemjs';
 import { buildImportMap } from 'app/features/plugins/loader/utils';
 import * as sdk from 'app/plugins/sdk';
 
 import { registerAngularDirectives } from './angular_wrappers';
 import { initAngularRoutingBridge } from './bridgeReactAngularRouting';
 import { monkeyPatchInjectorWithPreAssignedBindings } from './injectorMonkeyPatch';
+import { getAngularPanelReactWrapper } from './panel/AngularPanelReactWrapper';
 import { promiseToDigest } from './promiseToDigest';
 import { registerComponents } from './registerComponents';
 
 // Angular plugin dependencies map
 const importMap = {
-  angular: angular,
+  angular: {
+    ...angular,
+    default: angular,
+  },
   'app/core/core_module': {
     default: coreModule,
     __useDefault: true,
@@ -52,6 +58,8 @@ export class AngularApp {
 
   init() {
     const app = angular.module('grafana', []);
+
+    setAngularPanelReactWrapper(getAngularPanelReactWrapper);
 
     app.config([
       '$controllerProvider',

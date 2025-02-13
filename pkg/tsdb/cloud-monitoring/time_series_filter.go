@@ -8,20 +8,20 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/huandu/xstrings"
 
-	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/tsdb/cloud-monitoring/kinds/dataquery"
 )
 
 func (timeSeriesFilter *cloudMonitoringTimeSeriesList) run(ctx context.Context, req *backend.QueryDataRequest,
-	s *Service, dsInfo datasourceInfo, tracer tracing.Tracer) (*backend.DataResponse, any, string, error) {
-	return runTimeSeriesRequest(ctx, timeSeriesFilter.logger, req, s, dsInfo, tracer, timeSeriesFilter.parameters.ProjectName, timeSeriesFilter.params, nil)
+	s *Service, dsInfo datasourceInfo, logger log.Logger) (*backend.DataResponse, any, string, error) {
+	return runTimeSeriesRequest(ctx, req, s, dsInfo, timeSeriesFilter.parameters.ProjectName, timeSeriesFilter.params, nil, logger, timeSeriesFilter.timeRange)
 }
 
 func parseTimeSeriesResponse(queryRes *backend.DataResponse,
-	response cloudMonitoringResponse, executedQueryString string, query cloudMonitoringQueryExecutor, params url.Values, groupBys []string) error {
+	response cloudMonitoringResponse, executedQueryString string, query cloudMonitoringQueryExecutor, params url.Values, groupBys []string, logger log.Logger) error {
 	frames := data.Frames{}
 
 	for _, series := range response.TimeSeries {
@@ -37,6 +37,9 @@ func parseTimeSeriesResponse(queryRes *backend.DataResponse,
 				"groupBys":         groupBys,
 			},
 		}
+		// Ensure the time field is named correctly
+		timeField := frame.Fields[0]
+		timeField.Name = data.TimeSeriesTimeFieldName
 
 		var err error
 		frames, err = appendFrames(frames, series, 0, defaultMetricName, seriesLabels, frame, query)
@@ -47,7 +50,7 @@ func parseTimeSeriesResponse(queryRes *backend.DataResponse,
 	if len(response.TimeSeries) > 0 {
 		dl := query.buildDeepLink()
 		aggregationAlignmentString := params.Get("aggregation.alignmentPeriod")
-		frames = addConfigData(frames, dl, response.Unit, &aggregationAlignmentString)
+		frames = addConfigData(frames, dl, response.Unit, aggregationAlignmentString, logger)
 	}
 
 	queryRes.Frames = frames
@@ -56,8 +59,8 @@ func parseTimeSeriesResponse(queryRes *backend.DataResponse,
 }
 
 func (timeSeriesFilter *cloudMonitoringTimeSeriesList) parseResponse(queryRes *backend.DataResponse,
-	response any, executedQueryString string) error {
-	return parseTimeSeriesResponse(queryRes, response.(cloudMonitoringResponse), executedQueryString, timeSeriesFilter, timeSeriesFilter.params, timeSeriesFilter.parameters.GroupBys)
+	response any, executedQueryString string, logger log.Logger) error {
+	return parseTimeSeriesResponse(queryRes, response.(cloudMonitoringResponse), executedQueryString, timeSeriesFilter, timeSeriesFilter.params, timeSeriesFilter.parameters.GroupBys, logger)
 }
 
 func (timeSeriesFilter *cloudMonitoringTimeSeriesList) buildDeepLink() string {
@@ -89,10 +92,11 @@ func (timeSeriesFilter *cloudMonitoringTimeSeriesList) buildDeepLink() string {
 		timeSeriesFilter.params.Get("interval.endTime"),
 	)
 	if err != nil {
-		slog.Error(
+		backend.Logger.Error(
 			"Failed to generate deep link: unable to parse metrics explorer URL",
 			"ProjectName", timeSeriesFilter.parameters.ProjectName,
 			"error", err,
+			"statusSource", backend.ErrorSourcePlugin,
 		)
 	}
 

@@ -99,7 +99,8 @@ func (c *LDAP) disableUser(ctx context.Context, username string) (*authn.Identit
 
 	// Disable the user
 	c.logger.Debug("User was removed from the LDAP directory tree, disabling it", "username", username, "authID", authinfo.AuthId)
-	if errDisable := c.userService.Disable(ctx, &user.DisableUserCommand{UserID: dbUser.ID, IsDisabled: true}); errDisable != nil {
+	isDiabled := true
+	if errDisable := c.userService.Update(ctx, &user.UpdateUserCommand{UserID: dbUser.ID, IsDisabled: &isDiabled}); errDisable != nil {
 		return nil, errDisable
 	}
 
@@ -118,13 +119,13 @@ func (c *LDAP) identityFromLDAPInfo(orgID int64, info *login.ExternalUserInfo) *
 		AuthID:          info.AuthId,
 		Groups:          info.Groups,
 		ClientParams: authn.ClientParams{
-			SyncUser:            true,
-			SyncTeams:           true,
-			EnableDisabledUsers: true,
-			FetchSyncedUser:     true,
-			SyncPermissions:     true,
-			SyncOrgRoles:        !c.cfg.LDAPSkipOrgRoleSync,
-			AllowSignUp:         c.cfg.LDAPAllowSignup,
+			SyncUser:        true,
+			SyncTeams:       true,
+			EnableUser:      true,
+			FetchSyncedUser: true,
+			SyncPermissions: true,
+			SyncOrgRoles:    !c.cfg.LDAPSkipOrgRoleSync,
+			AllowSignUp:     c.cfg.LDAPAllowSignup,
 			LookUpParams: login.UserLookupParams{
 				Login: &info.Login,
 				Email: &info.Email,

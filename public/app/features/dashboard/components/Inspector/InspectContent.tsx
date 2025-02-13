@@ -1,7 +1,16 @@
 import { isEmpty } from 'lodash';
-import React, { useState } from 'react';
+import { useState } from 'react';
 
-import { CoreApp, DataSourceApi, formattedValueToString, getValueFormat, PanelData, PanelPlugin } from '@grafana/data';
+import {
+  CoreApp,
+  DataSourceApi,
+  formattedValueToString,
+  getValueFormat,
+  PanelData,
+  PanelPlugin,
+  LoadingState,
+  DataQueryError,
+} from '@grafana/data';
 import { getTemplateSrv } from '@grafana/runtime';
 import { Drawer, Tab, TabsBar } from '@grafana/ui';
 import { t, Trans } from 'app/core/internationalization';
@@ -14,7 +23,8 @@ import { QueryInspector } from 'app/features/inspector/QueryInspector';
 import { InspectTab } from 'app/features/inspector/types';
 
 import { GetDataOptions } from '../../../query/state/PanelQueryRunner';
-import { DashboardModel, PanelModel } from '../../state';
+import { DashboardModel } from '../../state/DashboardModel';
+import { PanelModel } from '../../state/PanelModel';
 
 interface Props {
   dashboard: DashboardModel;
@@ -51,10 +61,7 @@ export const InspectContent = ({
     return null;
   }
 
-  let errors = data?.errors;
-  if (!errors?.length && data?.error) {
-    errors = [data.error];
-  }
+  let errors = getErrors(data);
 
   // Validate that the active tab is actually valid and allowed
   let activeTab = currentTab;
@@ -70,7 +77,6 @@ export const InspectContent = ({
       title={title}
       subtitle={data && formatStats(data)}
       onClose={onClose}
-      scrollableContent
       tabs={
         <TabsBar>
           {tabs.map((tab, index) => {
@@ -88,7 +94,7 @@ export const InspectContent = ({
     >
       {activeTab === InspectTab.Data && (
         <InspectDataTab
-          dataName={panel.getDisplayTitle()}
+          dataName={panelTitle}
           panelPluginId={panel.type}
           fieldConfig={panel.fieldConfig}
           hasTransformations={Boolean(panel.transformations?.length)}
@@ -113,6 +119,22 @@ export const InspectContent = ({
     </Drawer>
   );
 };
+
+// This will combine
+function getErrors(data: PanelData | undefined): DataQueryError[] {
+  let errors = data?.errors ?? [];
+  if (data?.error && !errors.includes(data.error)) {
+    errors = [data.error, ...errors];
+  }
+  if (!errors.length && data?.state === LoadingState.Error) {
+    return [
+      {
+        message: 'Error loading data',
+      },
+    ];
+  }
+  return errors;
+}
 
 function formatStats(data: PanelData) {
   const { request } = data;

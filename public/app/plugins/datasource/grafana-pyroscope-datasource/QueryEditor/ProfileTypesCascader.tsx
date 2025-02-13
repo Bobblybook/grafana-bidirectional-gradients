@@ -1,14 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
+import { TimeRange } from '@grafana/data';
 import { Cascader, CascaderOption } from '@grafana/ui';
 
-import { PhlareDataSource } from '../datasource';
+import { PyroscopeDataSource } from '../datasource';
 import { ProfileTypeMessage } from '../types';
 
 type Props = {
   initialProfileTypeId?: string;
   profileTypes?: ProfileTypeMessage[];
   onChange: (value: string) => void;
+  placeholder?: string;
+  width?: number;
 };
 
 export function ProfileTypesCascader(props: Props) {
@@ -16,6 +19,7 @@ export function ProfileTypesCascader(props: Props) {
 
   return (
     <Cascader
+      placeholder={props.placeholder}
       separator={'-'}
       displayAllSelectedLevels={true}
       initialValue={props.initialProfileTypeId}
@@ -23,6 +27,7 @@ export function ProfileTypesCascader(props: Props) {
       onSelect={props.onChange}
       options={cascaderOptions}
       changeOnSelect={false}
+      width={props.width ?? 26}
     />
   );
 }
@@ -37,14 +42,9 @@ function useCascaderOptions(profileTypes?: ProfileTypeMessage[]): CascaderOption
     // Classify profile types by name then sample type.
     // The profileTypes are something like cpu:sample:nanoseconds:sample:count or app.something.something
     for (let profileType of profileTypes) {
-      let parts: string[];
-      // Phlare uses : as delimiter while Pyro uses .
+      let parts: string[] = [];
       if (profileType.id.indexOf(':') > -1) {
         parts = profileType.id.split(':');
-      } else {
-        parts = profileType.id.split('.');
-        const last = parts.pop()!;
-        parts = [parts.join('.'), last];
       }
 
       const [name, type] = parts;
@@ -71,16 +71,22 @@ function useCascaderOptions(profileTypes?: ProfileTypeMessage[]): CascaderOption
  * This is exported and not used directly in the ProfileTypesCascader component because in some case we need to know
  * the profileTypes before rendering the cascader.
  * @param datasource
+ * @param range Time range for the profile types query.
  */
-export function useProfileTypes(datasource: PhlareDataSource) {
+export function useProfileTypes(datasource: PyroscopeDataSource, range?: TimeRange) {
   const [profileTypes, setProfileTypes] = useState<ProfileTypeMessage[]>();
+
+  const impreciseRange = {
+    to: Math.ceil((range?.to.valueOf() || 0) / 60000) * 60000,
+    from: Math.floor((range?.from.valueOf() || 0) / 60000) * 60000,
+  };
 
   useEffect(() => {
     (async () => {
-      const profileTypes = await datasource.getProfileTypes();
+      const profileTypes = await datasource.getProfileTypes(impreciseRange.from.valueOf(), impreciseRange.to.valueOf());
       setProfileTypes(profileTypes);
     })();
-  }, [datasource]);
+  }, [datasource, impreciseRange.from, impreciseRange.to]);
 
   return profileTypes;
 }

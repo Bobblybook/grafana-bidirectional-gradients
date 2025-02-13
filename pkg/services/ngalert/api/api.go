@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/grafana/grafana/pkg/api/routing"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/tracing"
-	"github.com/grafana/grafana/pkg/services/accesscontrol"
+	ac "github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/datasourceproxy"
 	"github.com/grafana/grafana/pkg/services/datasources"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
+	"github.com/grafana/grafana/pkg/services/ngalert/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/ngalert/backtesting"
 	"github.com/grafana/grafana/pkg/services/ngalert/eval"
 	"github.com/grafana/grafana/pkg/services/ngalert/metrics"
@@ -22,6 +24,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/ngalert/state"
 	"github.com/grafana/grafana/pkg/services/ngalert/store"
 	"github.com/grafana/grafana/pkg/services/quota"
+	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
@@ -34,7 +37,16 @@ type ExternalAlertmanagerProvider interface {
 }
 
 type AlertingStore interface {
-	GetLatestAlertmanagerConfiguration(ctx context.Context, query *models.GetLatestAlertmanagerConfigurationQuery) (*models.AlertConfiguration, error)
+	GetLatestAlertmanagerConfiguration(ctx context.Context, orgID int64) (*models.AlertConfiguration, error)
+}
+
+type RuleAccessControlService interface {
+	HasAccessToRuleGroup(ctx context.Context, user identity.Requester, rules models.RulesGroup) (bool, error)
+	AuthorizeAccessToRuleGroup(ctx context.Context, user identity.Requester, rules models.RulesGroup) error
+	AuthorizeRuleChanges(ctx context.Context, user identity.Requester, change *store.GroupDelta) error
+	AuthorizeDatasourceAccessForRule(ctx context.Context, user identity.Requester, rule *models.AlertRule) error
+	AuthorizeDatasourceAccessForRuleGroup(ctx context.Context, user identity.Requester, rules models.RulesGroup) error
+	AuthorizeAccessInFolder(ctx context.Context, user identity.Requester, namespaced models.Namespaced) error
 }
 
 // API handlers.
@@ -47,23 +59,27 @@ type API struct {
 	TransactionManager   provisioning.TransactionManager
 	ProvenanceStore      provisioning.ProvisioningStore
 	RuleStore            RuleStore
-	AlertingStore        AlertingStore
+	AlertingStore        store.AlertingStore
 	AdminConfigStore     store.AdminConfigurationStore
 	DataProxy            *datasourceproxy.DataSourceProxyService
 	MultiOrgAlertmanager *notifier.MultiOrgAlertmanager
 	StateManager         *state.Manager
-	AccessControl        accesscontrol.AccessControl
+	Scheduler            StatusReader
+	AccessControl        ac.AccessControl
 	Policies             *provisioning.NotificationPolicyService
+	ReceiverService      *notifier.ReceiverService
 	ContactPointService  *provisioning.ContactPointService
 	Templates            *provisioning.TemplateService
 	MuteTimings          *provisioning.MuteTimingService
 	AlertRules           *provisioning.AlertRuleService
 	AlertsRouter         *sender.AlertsRouter
 	EvaluatorFactory     eval.EvaluatorFactory
+	ConditionValidator   *eval.ConditionValidator
 	FeatureManager       featuremgmt.FeatureToggles
 	Historian            Historian
 	Tracer               tracing.Tracer
 	AppUrl               *url.URL
+	UserService          user.Service
 
 	// Hooks can be used to replace API handlers for specific paths.
 	Hooks *Hooks
@@ -76,32 +92,52 @@ func (api *API) RegisterAPIEndpoints(m *metrics.API) {
 		DataProxy: api.DataProxy,
 		ac:        api.AccessControl,
 	}
+	ruleAuthzService := accesscontrol.NewRuleService(api.AccessControl)
 
 	// Register endpoints for proxying to Alertmanager-compatible backends.
 	api.RegisterAlertmanagerApiEndpoints(NewForkingAM(
 		api.DatasourceCache,
 		NewLotexAM(proxy, logger),
-		&AlertmanagerSrv{crypto: api.MultiOrgAlertmanager.Crypto, log: logger, ac: api.AccessControl, mam: api.MultiOrgAlertmanager},
+		&AlertmanagerSrv{
+			crypto:         api.MultiOrgAlertmanager.Crypto,
+			log:            logger,
+			ac:             api.AccessControl,
+			mam:            api.MultiOrgAlertmanager,
+			featureManager: api.FeatureManager,
+			silenceSvc: notifier.NewSilenceService(
+				accesscontrol.NewSilenceService(api.AccessControl, api.RuleStore),
+				api.TransactionManager,
+				logger,
+				api.MultiOrgAlertmanager,
+				api.RuleStore,
+				ruleAuthzService,
+			),
+			receiverAuthz: accesscontrol.NewReceiverAccess[ReceiverStatus](api.AccessControl, false),
+		},
 	), m)
 	// Register endpoints for proxying to Prometheus-compatible backends.
 	api.RegisterPrometheusApiEndpoints(NewForkingProm(
 		api.DatasourceCache,
 		NewLotexProm(proxy, logger),
-		&PrometheusSrv{log: logger, manager: api.StateManager, store: api.RuleStore, ac: api.AccessControl},
+		&PrometheusSrv{log: logger, manager: api.StateManager, status: api.Scheduler, store: api.RuleStore, authz: ruleAuthzService},
 	), m)
 	// Register endpoints for proxying to Cortex Ruler-compatible backends.
 	api.RegisterRulerApiEndpoints(NewForkingRuler(
 		api.DatasourceCache,
 		NewLotexRuler(proxy, logger),
 		&RulerSrv{
-			conditionValidator: api.EvaluatorFactory,
+			conditionValidator: api.ConditionValidator,
 			QuotaService:       api.QuotaService,
 			store:              api.RuleStore,
 			provenanceStore:    api.ProvenanceStore,
 			xactManager:        api.TransactionManager,
 			log:                logger,
 			cfg:                &api.Cfg.UnifiedAlerting,
-			ac:                 api.AccessControl,
+			authz:              ruleAuthzService,
+			amConfigStore:      api.AlertingStore,
+			amRefresher:        api.MultiOrgAlertmanager,
+			featureManager:     api.FeatureManager,
+			userService:        api.UserService,
 		},
 	), m)
 	api.RegisterTestingApiEndpoints(NewTestingApi(
@@ -109,13 +145,14 @@ func (api *API) RegisterAPIEndpoints(m *metrics.API) {
 			AlertingProxy:   proxy,
 			DatasourceCache: api.DatasourceCache,
 			log:             logger,
-			accessControl:   api.AccessControl,
+			authz:           ruleAuthzService,
 			evaluator:       api.EvaluatorFactory,
 			cfg:             &api.Cfg.UnifiedAlerting,
 			backtesting:     backtesting.NewEngine(api.AppUrl, api.EvaluatorFactory, api.Tracer),
 			featureManager:  api.FeatureManager,
 			appUrl:          api.AppUrl,
 			tracer:          api.Tracer,
+			folderService:   api.RuleStore,
 		}), m)
 	api.RegisterConfigurationApiEndpoints(NewConfiguration(
 		&ConfigSrv{
@@ -123,6 +160,7 @@ func (api *API) RegisterAPIEndpoints(m *metrics.API) {
 			store:                api.AdminConfigStore,
 			log:                  logger,
 			alertmanagerProvider: api.AlertsRouter,
+			featureManager:       api.FeatureManager,
 		},
 	), m)
 
@@ -133,41 +171,24 @@ func (api *API) RegisterAPIEndpoints(m *metrics.API) {
 		templates:           api.Templates,
 		muteTimings:         api.MuteTimings,
 		alertRules:          api.AlertRules,
+		// XXX: Used to flag recording rules, remove when FT is removed
+		featureManager: api.FeatureManager,
 	}), m)
 
 	api.RegisterHistoryApiEndpoints(NewStateHistoryApi(&HistorySrv{
 		logger: logger,
 		hist:   api.Historian,
 	}), m)
-}
 
-func (api *API) Usage(ctx context.Context, scopeParams *quota.ScopeParameters) (*quota.Map, error) {
-	u := &quota.Map{}
+	api.RegisterNotificationsApiEndpoints(NewNotificationsApi(&NotificationSrv{
+		logger:            logger,
+		receiverService:   api.ReceiverService,
+		muteTimingService: api.MuteTimings,
+	}), m)
 
-	var orgID int64 = 0
-	if scopeParams != nil {
-		orgID = scopeParams.OrgID
+	if api.FeatureManager.IsEnabledGlobally(featuremgmt.FlagAlertingConversionAPI) {
+		api.RegisterConvertPrometheusApiEndpoints(NewConvertPrometheusApi(&ConvertPrometheusSrv{
+			logger: logger,
+		}), m)
 	}
-
-	if orgUsage, err := api.RuleStore.Count(ctx, orgID); err != nil {
-		return u, err
-	} else {
-		tag, err := quota.NewTag(models.QuotaTargetSrv, models.QuotaTarget, quota.OrgScope)
-		if err != nil {
-			return u, err
-		}
-		u.Set(tag, orgUsage)
-	}
-
-	if globalUsage, err := api.RuleStore.Count(ctx, 0); err != nil {
-		return u, err
-	} else {
-		tag, err := quota.NewTag(models.QuotaTargetSrv, models.QuotaTarget, quota.GlobalScope)
-		if err != nil {
-			return u, err
-		}
-		u.Set(tag, globalUsage)
-	}
-
-	return u, nil
 }

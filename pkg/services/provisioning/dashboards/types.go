@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/grafana/grafana/pkg/components/simplejson"
+	"github.com/grafana/grafana/pkg/infra/metrics"
 	"github.com/grafana/grafana/pkg/services/dashboards"
 	"github.com/grafana/grafana/pkg/services/provisioning/values"
 )
@@ -35,6 +36,13 @@ type configV0 struct {
 	AllowUIUpdates        bool           `json:"allowUiUpdates" yaml:"allowUiUpdates"`
 }
 
+// Access to dashboard provisioning config
+// Exposes the internal config outside this package with as few changes as possible
+// NOTE: these provisioning configs will eventually be replaced with: /apis/provisioning.grafana.app/
+type DashboardProvisioning struct {
+	config
+}
+
 type configVersion struct {
 	APIVersion int64 `json:"apiVersion" yaml:"apiVersion"`
 }
@@ -56,14 +64,17 @@ type configs struct {
 	AllowUIUpdates        values.BoolValue   `json:"allowUiUpdates" yaml:"allowUiUpdates"`
 }
 
-func createDashboardJSON(data *simplejson.Json, lastModified time.Time, cfg *config, folderID int64) (*dashboards.SaveDashboardDTO, error) {
+func createDashboardJSON(data *simplejson.Json, lastModified time.Time, cfg *config, folderID int64, folderUID string) (*dashboards.SaveDashboardDTO, error) {
 	dash := &dashboards.SaveDashboardDTO{}
 	dash.Dashboard = dashboards.NewDashboardFromJson(data)
 	dash.UpdatedAt = lastModified
 	dash.Overwrite = true
 	dash.OrgID = cfg.OrgID
 	dash.Dashboard.OrgID = cfg.OrgID
+	metrics.MFolderIDsServiceCount.WithLabelValues(metrics.Provisioning).Inc()
+	// nolint:staticcheck
 	dash.Dashboard.FolderID = folderID
+	dash.Dashboard.FolderUID = folderUID
 
 	if dash.Dashboard.Title == "" {
 		return nil, dashboards.ErrDashboardTitleEmpty

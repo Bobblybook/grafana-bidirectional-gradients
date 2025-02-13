@@ -1,17 +1,19 @@
 import { css } from '@emotion/css';
-import React, { useMemo } from 'react';
-import { Redirect } from 'react-router-dom';
+import { useMemo } from 'react';
+import { Navigate } from 'react-router-dom-v5-compat';
 import { useLocation } from 'react-use';
 
 import { GrafanaTheme2 } from '@grafana/data';
 import { config, isFetchError } from '@grafana/runtime';
-import { Alert, Card, Icon, LoadingPlaceholder, useStyles2, withErrorBoundary } from '@grafana/ui';
+import { Alert, Card, Icon, LoadingPlaceholder, useStyles2 } from '@grafana/ui';
 
 import { AlertLabels } from './components/AlertLabels';
 import { RuleViewerLayout } from './components/rule-viewer/RuleViewerLayout';
 import { useCloudCombinedRulesMatching } from './hooks/useCombinedRule';
 import { getRulesSourceByName } from './utils/datasource';
 import { createViewLink } from './utils/misc';
+import { unescapePathSeparators } from './utils/rule-id';
+import { withPageErrorBoundary } from './withPageErrorBoundary';
 
 const pageTitle = 'Find rule';
 const subUrl = config.appSubUrl;
@@ -27,8 +29,7 @@ function useRuleFindParams() {
 
   return useMemo(() => {
     const segments = location.pathname?.replace(subUrl, '').split('/') ?? []; // ["", "alerting", "{sourceName}", "{name}]
-
-    const name = decodeURIComponent(segments[3]);
+    const name = unescapePathSeparators(decodeURIComponent(unescapePathSeparators(segments[3])));
     const sourceName = decodeURIComponent(segments[2]);
 
     const searchParams = new URLSearchParams(location.search);
@@ -53,7 +54,7 @@ export function RedirectToRuleViewer(): JSX.Element | null {
   } = useCloudCombinedRulesMatching(name, sourceName, { namespace, groupName: group });
 
   if (!name || !sourceName) {
-    return <Redirect to="/notfound" />;
+    return <Navigate replace to="/notfound" />;
   }
 
   if (error) {
@@ -95,7 +96,7 @@ export function RedirectToRuleViewer(): JSX.Element | null {
   if (rules.length === 1) {
     const [rule] = rules;
     const to = createViewLink(rulesSource, rule, '/alerting/list').replace(subUrl, '');
-    return <Redirect to={to} />;
+    return <Navigate replace to={to} />;
   }
 
   if (rules.length === 0) {
@@ -137,20 +138,20 @@ export function RedirectToRuleViewer(): JSX.Element | null {
 
 function getStyles(theme: GrafanaTheme2) {
   return {
-    param: css`
-      font-style: italic;
-      color: ${theme.colors.text.secondary};
-    `,
-    rules: css`
-      margin-top: ${theme.spacing(2)};
-    `,
-    namespace: css`
-      margin-left: ${theme.spacing(1)};
-    `,
-    errorMessage: css`
-      white-space: pre-wrap;
-    `,
+    param: css({
+      fontStyle: 'italic',
+      color: theme.colors.text.secondary,
+    }),
+    rules: css({
+      marginTop: theme.spacing(2),
+    }),
+    namespace: css({
+      marginLeft: theme.spacing(1),
+    }),
+    errorMessage: css({
+      whiteSpace: 'pre-wrap',
+    }),
   };
 }
 
-export default withErrorBoundary(RedirectToRuleViewer, { style: 'page' });
+export default withPageErrorBoundary(RedirectToRuleViewer);

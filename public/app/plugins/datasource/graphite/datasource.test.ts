@@ -2,7 +2,14 @@ import { isArray } from 'lodash';
 import { of } from 'rxjs';
 import { createFetchResponse } from 'test/helpers/createFetchResponse';
 
-import { AbstractLabelMatcher, AbstractLabelOperator, getFrameDisplayName, dateTime } from '@grafana/data';
+import {
+  AbstractLabelMatcher,
+  AbstractLabelOperator,
+  getFrameDisplayName,
+  dateTime,
+  DataQueryRequest,
+  MetricFindValue,
+} from '@grafana/data';
 import { BackendSrvRequest } from '@grafana/runtime';
 import { backendSrv } from 'app/core/services/backend_srv'; // will use the version in __mocks__
 import { TemplateSrv } from 'app/features/templating/template_srv';
@@ -48,8 +55,12 @@ describe('graphiteDatasource', () => {
 
   describe('convertResponseToDataFrames', () => {
     it('should transform regular result', () => {
-      const result = ctx.ds.convertResponseToDataFrames({
-        data: {
+      const refIDMap = {
+        refIDA: 'A',
+        refIDB: 'B',
+      };
+      const result = ctx.ds.convertResponseToDataFrames(
+        createFetchResponse({
           meta: {
             stats: {
               'executeplan.cache-hit-partial.count': 5,
@@ -58,7 +69,7 @@ describe('graphiteDatasource', () => {
           },
           series: [
             {
-              target: 'seriesA',
+              target: 'seriesA refIDA',
               datapoints: [
                 [100, 200],
                 [101, 201],
@@ -78,7 +89,7 @@ describe('graphiteDatasource', () => {
               ],
             },
             {
-              target: 'seriesB',
+              target: 'seriesB refIDB',
               meta: [
                 {
                   'aggnum-norm': 1,
@@ -98,32 +109,37 @@ describe('graphiteDatasource', () => {
               ],
             },
           ],
-        },
-      });
+        }),
+        refIDMap
+      );
 
       expect(result.data.length).toBe(2);
       expect(getFrameDisplayName(result.data[0])).toBe('seriesA');
       expect(getFrameDisplayName(result.data[1])).toBe('seriesB');
       expect(result.data[0].length).toBe(2);
       expect(result.data[0].meta.notices.length).toBe(1);
+      expect(result.data[0].refId).toBe('A');
       expect(result.data[0].meta.notices[0].text).toBe('Data is rolled up, aggregated over 2h using Average function');
       expect(result.data[1].meta.notices).toBeUndefined();
+      expect(result.data[1].refId).toBe('B');
     });
   });
 
   describe('When querying graphite with one target using query editor target spec', () => {
-    const query = {
-      panelId: 3,
-      dashboardId: 5,
-      range: { from: dateTime('2022-04-01T00:00:00'), to: dateTime('2022-07-01T00:00:00') },
-      targets: [{ target: 'prod1.count' }, { target: 'prod2.count' }],
-      maxDataPoints: 500,
-    };
-
-    let response: any;
+    let response: unknown;
     let requestOptions: BackendSrvRequest;
 
     beforeEach(() => {
+      const query = {
+        panelId: 3,
+        dashboardId: 5,
+        range: { from: dateTime('2022-04-01T00:00:00'), to: dateTime('2022-07-01T00:00:00') },
+        targets: [
+          { target: 'prod1.count', refId: 'A' },
+          { target: 'prod2.count', refId: 'B' },
+        ],
+        maxDataPoints: 500,
+      };
       fetchMock.mockImplementation((options) => {
         requestOptions = options;
         return of(
@@ -139,7 +155,7 @@ describe('graphiteDatasource', () => {
         );
       });
 
-      response = ctx.ds.query(query as any);
+      response = ctx.ds.query(query as unknown as DataQueryRequest<GraphiteQuery>);
     });
 
     it('X-Dashboard and X-Panel headers to be set!', () => {
@@ -157,8 +173,8 @@ describe('graphiteDatasource', () => {
 
     it('should query correctly', () => {
       const params = requestOptions.data.split('&');
-      expect(params).toContain('target=prod1.count');
-      expect(params).toContain('target=prod2.count');
+      expect(params).toContain(`target=${encodeURIComponent(`aliasSub(prod1.count, "(^.*$)", "\\1 A")`)}`);
+      expect(params).toContain(`target=${encodeURIComponent(`aliasSub(prod2.count, "(^.*$)", "\\1 B")`)}`);
       expect(params).toContain('from=1648789200');
       expect(params).toContain('until=1656655200');
     });
@@ -202,12 +218,12 @@ describe('graphiteDatasource', () => {
           fromAnnotations: true,
           tags: ['tag1'],
           queryType: 'tags',
-        },
+        } as GraphiteQuery,
       ],
 
       range: {
-        from: '2022-06-06T07:03:03.109Z',
-        to: '2022-06-07T07:03:03.109Z',
+        from: dateTime('2022-06-06T07:03:03.109Z'),
+        to: dateTime('2022-06-07T07:03:03.109Z'),
         raw: {
           from: '2022-06-06T07:03:03.109Z',
           to: '2022-06-07T07:03:03.109Z',
@@ -411,7 +427,7 @@ describe('graphiteDatasource', () => {
   });
 
   describe('querying for template variables', () => {
-    let results: any;
+    let results: MetricFindValue[];
     let requestOptions: BackendSrvRequest;
 
     beforeEach(() => {
@@ -503,7 +519,7 @@ describe('graphiteDatasource', () => {
           current: { value: ['bar'] },
         },
       ]);
-      ctx.ds.metricFindQuery('[[foo]]').then((data: any) => {
+      ctx.ds.metricFindQuery('[[foo]]').then((data) => {
         results = data;
       });
       expect(requestOptions.url).toBe('/api/datasources/proxy/1/metrics/find');
@@ -741,6 +757,7 @@ function accessScenario(name: string, url: string, fn: ({ headers }: { headers: 
 
     const httpOptions = {
       headers: {},
+      url,
     };
 
     describe('when using proxy mode', () => {

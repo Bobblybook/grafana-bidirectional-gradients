@@ -54,8 +54,10 @@ func logsResultsToDataframes(response *cloudwatchlogs.GetQueryResultsOutput) (*d
 			if _, exists := fieldValues[*resultField.Field]; !exists {
 				fieldNames = append(fieldNames, *resultField.Field)
 
-				// Check if it's a time field
-				if _, err := time.Parse(cloudWatchTSFormat, *resultField.Value); err == nil {
+				// Check if it's a cloudWatchTSFormat field or one of the known timestamp fields:
+				// https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_AnalyzeLogData-discoverable-fields.html
+				// which can be in a millisecond format as well as cloudWatchTSFormat string format
+				if _, err := time.Parse(cloudWatchTSFormat, *resultField.Value); err == nil || isTimestampField(*resultField.Field) {
 					fieldValues[*resultField.Field] = make([]*time.Time, rowCount)
 				} else if _, err := strconv.ParseFloat(*resultField.Value, 64); err == nil {
 					fieldValues[*resultField.Field] = make([]*float64, rowCount)
@@ -67,9 +69,13 @@ func logsResultsToDataframes(response *cloudwatchlogs.GetQueryResultsOutput) (*d
 			if timeField, ok := fieldValues[*resultField.Field].([]*time.Time); ok {
 				parsedTime, err := time.Parse(cloudWatchTSFormat, *resultField.Value)
 				if err != nil {
-					return nil, err
+					unixTimeMs, err := strconv.ParseInt(*resultField.Value, 10, 64)
+					if err == nil {
+						parsedTime = time.Unix(unixTimeMs/1000, (unixTimeMs%1000)*int64(time.Millisecond))
+					} else {
+						return nil, err
+					}
 				}
-
 				timeField[i] = &parsedTime
 			} else if numericField, ok := fieldValues[*resultField.Field].([]*float64); ok {
 				parsedFloat, err := strconv.ParseFloat(*resultField.Value, 64)
@@ -205,14 +211,16 @@ func groupResults(results *data.Frame, groupingFieldNames []string, fromSyncQuer
 			if fromSyncQuery {
 				// remove grouping indices
 				newFrame.Fields = removeFieldsByIndex(newFrame.Fields, removeFieldIndices)
+				groupLabels := generateLabels(groupingFields, i)
 
 				// set the group key as the display name for sync queries
-				for i := 1; i < len(newFrame.Fields); i++ {
-					valueField := newFrame.Fields[i]
+				for j := 1; j < len(newFrame.Fields); j++ {
+					valueField := newFrame.Fields[j]
 					if valueField.Config == nil {
 						valueField.Config = &data.FieldConfig{}
 					}
 					valueField.Config.DisplayNameFromDS = groupKey
+					valueField.Labels = groupLabels
 				}
 			}
 
@@ -275,8 +283,19 @@ func generateGroupKey(fields []*data.Field, row int) string {
 			}
 		}
 	}
-
 	return groupKey
+}
+
+func generateLabels(fields []*data.Field, row int) data.Labels {
+	labels := data.Labels{}
+	for _, field := range fields {
+		if strField, ok := field.At(row).(*string); ok {
+			if strField != nil {
+				labels[field.Name] = *strField
+			}
+		}
+	}
+	return labels
 }
 
 func numericFieldToStringField(field *data.Field) (*data.Field, error) {
@@ -299,4 +318,8 @@ func numericFieldToStringField(field *data.Field) (*data.Field, error) {
 	newField.Config = field.Config
 
 	return newField, nil
+}
+
+func isTimestampField(fieldName string) bool {
+	return fieldName == "@timestamp" || fieldName == "@ingestionTime"
 }

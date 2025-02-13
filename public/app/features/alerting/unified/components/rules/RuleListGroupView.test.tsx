@@ -1,38 +1,32 @@
-import { render, waitFor } from '@testing-library/react';
-import React from 'react';
-import { Provider } from 'react-redux';
-import { Router } from 'react-router-dom';
+import { waitFor } from '@testing-library/react';
+import { render } from 'test/test-utils';
 import { byRole } from 'testing-library-selector';
 
-import { locationService, logInfo } from '@grafana/runtime';
+import { setPluginLinksHook } from '@grafana/runtime';
 import { contextSrv } from 'app/core/services/context_srv';
-import { configureStore } from 'app/store/configureStore';
 import { AccessControlAction } from 'app/types';
 import { CombinedRuleNamespace } from 'app/types/unified-alerting';
 
-import { LogMessages } from '../../Analytics';
+import * as analytics from '../../Analytics';
 import { mockCombinedRule, mockDataSource } from '../../mocks';
 import { GRAFANA_RULES_SOURCE_NAME } from '../../utils/datasource';
 
 import { RuleListGroupView } from './RuleListGroupView';
 
-jest.mock('@grafana/runtime', () => {
-  const original = jest.requireActual('@grafana/runtime');
-  return {
-    ...original,
-    logInfo: jest.fn(),
-  };
-});
+jest.spyOn(analytics, 'logInfo');
 
 const ui = {
-  grafanaRulesHeading: byRole('heading', { name: 'Grafana' }),
-  cloudRulesHeading: byRole('heading', { name: 'Mimir / Cortex / Loki' }),
+  grafanaRulesHeading: byRole('heading', { name: 'Grafana-managed' }),
+  cloudRulesHeading: byRole('heading', { name: 'Data source-managed' }),
 };
+
+setPluginLinksHook(() => ({
+  links: [],
+  isLoading: false,
+}));
 
 describe('RuleListGroupView', () => {
   describe('RBAC', () => {
-    jest.spyOn(contextSrv, 'accessControlEnabled').mockReturnValue(true);
-
     it('Should display Grafana rules when the user has the alert rule read permission', async () => {
       const grafanaNamespace = getGrafanaNamespace();
       const namespaces: CombinedRuleNamespace[] = [grafanaNamespace];
@@ -99,21 +93,13 @@ describe('RuleListGroupView', () => {
 
       renderRuleList(namespaces);
 
-      expect(logInfo).toHaveBeenCalledWith(LogMessages.loadedList);
+      expect(analytics.logInfo).toHaveBeenCalledWith(analytics.LogMessages.loadedList);
     });
   });
 });
 
 function renderRuleList(namespaces: CombinedRuleNamespace[]) {
-  const store = configureStore();
-
-  render(
-    <Provider store={store}>
-      <Router history={locationService.getHistory()}>
-        <RuleListGroupView namespaces={namespaces} expandAll />
-      </Router>
-    </Provider>
-  );
+  render(<RuleListGroupView namespaces={namespaces} expandAll />);
 }
 
 function getGrafanaNamespace(): CombinedRuleNamespace {

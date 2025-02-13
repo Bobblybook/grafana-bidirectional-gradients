@@ -30,7 +30,7 @@ func TestHTTPServer_GetFolderPermissionList(t *testing.T) {
 
 	t.Run("should be able to list acl with correct permission", func(t *testing.T) {
 		server := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{ID: 1, UID: "1"}}
+			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{UID: "1"}}
 			hs.folderPermissionsService = &actest.FakePermissionsService{
 				ExpectedPermissions: []accesscontrol.ResourcePermission{},
 			}
@@ -50,12 +50,12 @@ func TestHTTPServer_GetFolderPermissionList(t *testing.T) {
 			cfg := setting.NewCfg()
 			cfg.HiddenUsers = map[string]struct{}{"hidden": {}}
 			hs.Cfg = cfg
-			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{ID: 1, UID: "1"}}
+			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{UID: "1"}}
 
 			hs.folderPermissionsService = &actest.FakePermissionsService{
 				ExpectedPermissions: []accesscontrol.ResourcePermission{
-					{UserId: 1, UserLogin: "regular", IsManaged: true},
-					{UserId: 2, UserLogin: "hidden", IsManaged: true},
+					{UserID: 1, UserLogin: "regular", IsManaged: true},
+					{UserID: 2, UserLogin: "hidden", IsManaged: true},
 				},
 			}
 		})
@@ -88,7 +88,7 @@ func TestHTTPServer_UpdateFolderPermissions(t *testing.T) {
 
 	t.Run("should be able to update acl with correct permissions", func(t *testing.T) {
 		server := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{ID: 1, UID: "1"}}
+			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{UID: "1"}}
 			hs.folderPermissionsService = &actest.FakePermissionsService{}
 		})
 
@@ -104,7 +104,7 @@ func TestHTTPServer_UpdateFolderPermissions(t *testing.T) {
 
 	t.Run("should not be able to specify team and user in same acl", func(t *testing.T) {
 		server := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{ID: 1, UID: "1"}}
+			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{UID: "1"}}
 			hs.folderPermissionsService = &actest.FakePermissionsService{}
 		})
 
@@ -120,7 +120,7 @@ func TestHTTPServer_UpdateFolderPermissions(t *testing.T) {
 
 	t.Run("should not be able to specify team and role in same acl", func(t *testing.T) {
 		server := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{ID: 1, UID: "1"}}
+			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{UID: "1"}}
 			hs.folderPermissionsService = &actest.FakePermissionsService{}
 		})
 
@@ -136,7 +136,7 @@ func TestHTTPServer_UpdateFolderPermissions(t *testing.T) {
 
 	t.Run("should not be able to specify user and role in same acl", func(t *testing.T) {
 		server := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{ID: 1, UID: "1"}}
+			hs.folderService = &foldertest.FakeService{ExpectedFolder: &folder.Folder{UID: "1"}}
 			hs.folderPermissionsService = &actest.FakePermissionsService{}
 		})
 

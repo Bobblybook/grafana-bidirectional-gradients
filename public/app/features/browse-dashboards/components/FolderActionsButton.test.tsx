@@ -1,6 +1,5 @@
 import { render as rtlRender, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 import { TestProvider } from 'test/helpers/TestProvider';
 
 import { config } from '@grafana/runtime';
@@ -27,9 +26,10 @@ describe('browse-dashboards FolderActionsButton', () => {
   const mockFolder = mockFolderDTO();
   const mockPermissions = {
     canCreateDashboards: true,
-    canCreateFolder: true,
-    canDeleteFolder: true,
-    canEditFolder: true,
+    canEditDashboards: true,
+    canCreateFolders: true,
+    canDeleteFolders: true,
+    canEditFolders: true,
     canViewPermissions: true,
     canSetPermissions: true,
   };
@@ -55,8 +55,8 @@ describe('browse-dashboards FolderActionsButton', () => {
       jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => {
         return {
           ...mockPermissions,
-          canDeleteFolder: false,
-          canEditFolder: false,
+          canDeleteFolders: false,
+          canEditFolders: false,
           canViewPermissions: false,
           canSetPermissions: false,
         };
@@ -98,7 +98,7 @@ describe('browse-dashboards FolderActionsButton', () => {
       jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => {
         return {
           ...mockPermissions,
-          canEditFolder: false,
+          canEditFolders: false,
         };
       });
       render(<FolderActionsButton folder={mockFolder} />);
@@ -113,7 +113,7 @@ describe('browse-dashboards FolderActionsButton', () => {
       jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => {
         return {
           ...mockPermissions,
-          canDeleteFolder: false,
+          canDeleteFolders: false,
         };
       });
       render(<FolderActionsButton folder={mockFolder} />);
@@ -168,8 +168,8 @@ describe('browse-dashboards FolderActionsButton', () => {
       jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => {
         return {
           ...mockPermissions,
-          canDeleteFolder: false,
-          canEditFolder: false,
+          canDeleteFolders: false,
+          canEditFolders: false,
           canViewPermissions: false,
           canSetPermissions: false,
         };
@@ -216,7 +216,7 @@ describe('browse-dashboards FolderActionsButton', () => {
       jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => {
         return {
           ...mockPermissions,
-          canEditFolder: false,
+          canEditFolders: false,
         };
       });
       render(<FolderActionsButton folder={mockFolder} />);
@@ -230,7 +230,7 @@ describe('browse-dashboards FolderActionsButton', () => {
       jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => {
         return {
           ...mockPermissions,
-          canDeleteFolder: false,
+          canDeleteFolders: false,
         };
       });
       render(<FolderActionsButton folder={mockFolder} />);

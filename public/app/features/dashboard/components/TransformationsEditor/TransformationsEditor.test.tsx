@@ -1,13 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 
 import { DataTransformerConfig, standardTransformersRegistry } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
 import config from 'app/core/config';
 import { getStandardTransformers } from 'app/features/transformers/standardTransformers';
 
-import { PanelModel } from '../../state';
+import { PanelModel } from '../../state/PanelModel';
 
 import { TransformationsEditor } from './TransformationsEditor';
 
@@ -21,17 +20,17 @@ describe('TransformationsEditor', () => {
   standardTransformersRegistry.setInit(getStandardTransformers);
 
   describe('when no transformations configured', () => {
-    function renderList() {
+    it('renders transformation list by default and without transformationsRedesign on', () => {
       setup();
-
       const cards = screen.getAllByTestId(/New transform/i);
       expect(cards.length).toEqual(standardTransformersRegistry.list().length);
-    }
+    });
 
-    it('renders transformations selection list', renderList);
-    it('renders transformations selection list with transformationsRedesign feature toggled on', () => {
+    it('renders transformation empty message with transformationsRedesign feature toggled on', () => {
       config.featureToggles.transformationsRedesign = true;
-      renderList();
+      setup();
+      const message = screen.getAllByTestId('data-testid no transformations message');
+      expect(message.length).toEqual(1);
       config.featureToggles.transformationsRedesign = false;
     });
   });
@@ -93,7 +92,7 @@ describe('TransformationsEditor', () => {
 
         expect(screen.queryByTestId(debuggerSelector)).toBeNull();
 
-        const debugButton = screen.getByLabelText(selectors.components.QueryEditorRow.actionButton('Debug'));
+        const debugButton = screen.getByTestId(selectors.components.QueryEditorRow.actionButton('Debug'));
         await userEvent.click(debugButton);
 
         expect(screen.getByTestId(debuggerSelector)).toBeInTheDocument();

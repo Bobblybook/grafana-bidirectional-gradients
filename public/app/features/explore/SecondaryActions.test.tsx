@@ -1,38 +1,31 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { noop } from 'lodash';
-import React from 'react';
 
+import { QueriesDrawerContextProviderMock } from './QueriesDrawer/mocks';
 import { SecondaryActions } from './SecondaryActions';
 
 describe('SecondaryActions', () => {
-  it('should render component with three buttons', () => {
-    render(
-      <SecondaryActions
-        onClickAddQueryRowButton={noop}
-        onClickRichHistoryButton={noop}
-        onClickQueryInspectorButton={noop}
-      />
-    );
+  it('should render component with two buttons', () => {
+    render(<SecondaryActions onClickAddQueryRowButton={noop} onClickQueryInspectorButton={noop} />);
 
     expect(screen.getByRole('button', { name: /Add query/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Query history/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Query inspector/i })).toBeInTheDocument();
   });
 
   it('should not render hidden elements', () => {
     render(
-      <SecondaryActions
-        addQueryRowButtonHidden={true}
-        richHistoryRowButtonHidden={true}
-        onClickAddQueryRowButton={noop}
-        onClickRichHistoryButton={noop}
-        onClickQueryInspectorButton={noop}
-      />
+      <QueriesDrawerContextProviderMock queryLibraryAvailable={false}>
+        <SecondaryActions
+          addQueryRowButtonHidden={true}
+          richHistoryRowButtonHidden={true}
+          onClickAddQueryRowButton={noop}
+          onClickQueryInspectorButton={noop}
+        />
+      </QueriesDrawerContextProviderMock>
     );
 
     expect(screen.queryByRole('button', { name: /Add query/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Query history/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Query inspector/i })).toBeInTheDocument();
   });
 
@@ -41,13 +34,11 @@ describe('SecondaryActions', () => {
       <SecondaryActions
         addQueryRowButtonDisabled={true}
         onClickAddQueryRowButton={noop}
-        onClickRichHistoryButton={noop}
         onClickQueryInspectorButton={noop}
       />
     );
 
     expect(screen.getByRole('button', { name: /Add query/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Query history/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Query inspector/i })).toBeInTheDocument();
   });
 
@@ -59,18 +50,16 @@ describe('SecondaryActions', () => {
     const onClickQueryInspector = jest.fn();
 
     render(
-      <SecondaryActions
-        onClickAddQueryRowButton={onClickAddRow}
-        onClickRichHistoryButton={onClickHistory}
-        onClickQueryInspectorButton={onClickQueryInspector}
-      />
+      <QueriesDrawerContextProviderMock setDrawerOpened={onClickHistory}>
+        <SecondaryActions
+          onClickAddQueryRowButton={onClickAddRow}
+          onClickQueryInspectorButton={onClickQueryInspector}
+        />
+      </QueriesDrawerContextProviderMock>
     );
 
     await user.click(screen.getByRole('button', { name: /Add query/i }));
     expect(onClickAddRow).toBeCalledTimes(1);
-
-    await user.click(screen.getByRole('button', { name: /Query history/i }));
-    expect(onClickHistory).toBeCalledTimes(1);
 
     await user.click(screen.getByRole('button', { name: /Query inspector/i }));
     expect(onClickQueryInspector).toBeCalledTimes(1);

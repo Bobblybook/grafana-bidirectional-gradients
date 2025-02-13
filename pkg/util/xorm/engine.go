@@ -259,6 +259,15 @@ func (engine *Engine) SQL(query any, args ...any) *Session {
 	return session.SQL(query, args...)
 }
 
+// NoAutoTime Default if your struct has "created" or "updated" filed tag, the fields
+// will automatically be filled with current time when Insert or Update
+// invoked. Call NoAutoTime if you dont' want to fill automatically.
+func (engine *Engine) NoAutoTime() *Session {
+	session := engine.NewSession()
+	session.isAutoClose = true
+	return session.NoAutoTime()
+}
+
 func (engine *Engine) loadTableInfo(table *core.Table) error {
 	colSeq, cols, err := engine.dialect.GetColumns(table.Name)
 	if err != nil {
@@ -277,8 +286,6 @@ func (engine *Engine) loadTableInfo(table *core.Table) error {
 		for _, name := range index.Cols {
 			if col := table.GetColumn(name); col != nil {
 				col.Indexes[index.Name] = index.Type
-			} else {
-				return fmt.Errorf("unknown col %s in index %v of table %v, columns %v", name, index.Name, table.Name, table.ColumnsSeq())
 			}
 		}
 	}

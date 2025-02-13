@@ -1,7 +1,13 @@
 import { map } from 'rxjs/operators';
 
 import { getFieldDisplayName } from '../../field/fieldState';
-import { DataFrame, DataTransformerInfo, Field, FieldType, SpecialValue } from '../../types';
+import { DataFrame, Field } from '../../types/dataFrame';
+import {
+  SpecialValue,
+  DataTransformerInfo,
+  TransformationApplicabilityLevels,
+  DataTransformContext,
+} from '../../types/transformations';
 import { fieldMatchers } from '../matchers';
 import { FieldMatcherID } from '../matchers/ids';
 
@@ -33,13 +39,35 @@ export const groupingToMatrixTransformer: DataTransformerInfo<GroupingToMatrixTr
     rowField: DEFAULT_ROW_FIELD,
     valueField: DEFAULT_VALUE_FIELD,
   },
+  /**
+   * Grouping to matrix requires at least 3 fields to work.
+   */
+  isApplicable: (data: DataFrame[]) => {
+    let numFields = 0;
 
-  operator: (options) => (source) =>
+    for (const frame of data) {
+      numFields += frame.fields.length;
+    }
+
+    return numFields >= 3
+      ? TransformationApplicabilityLevels.Applicable
+      : TransformationApplicabilityLevels.NotApplicable;
+  },
+  isApplicableDescription: (data: DataFrame[]) => {
+    let numFields = 0;
+
+    for (const frame of data) {
+      numFields += frame.fields.length;
+    }
+
+    return `Grouping to matrix requiers at least 3 fields to work. Currently there are ${numFields} fields.`;
+  },
+  operator: (options: GroupingToMatrixTransformerOptions, ctx: DataTransformContext) => (source) =>
     source.pipe(
       map((data) => {
-        const columnFieldMatch = options.columnField || DEFAULT_COLUMN_FIELD;
-        const rowFieldMatch = options.rowField || DEFAULT_ROW_FIELD;
-        const valueFieldMatch = options.valueField || DEFAULT_VALUE_FIELD;
+        const columnFieldMatch = ctx.interpolate(options.columnField || DEFAULT_COLUMN_FIELD);
+        const rowFieldMatch = ctx.interpolate(options.rowField || DEFAULT_ROW_FIELD);
+        const valueFieldMatch = ctx.interpolate(options.valueField || DEFAULT_VALUE_FIELD);
         const emptyValue = options.emptyValue || DEFAULT_EMPTY_VALUE;
 
         // Accept only single queries
@@ -60,7 +88,7 @@ export const groupingToMatrixTransformer: DataTransformerInfo<GroupingToMatrixTr
         const columnValues = uniqueValues(keyColumnField.values);
         const rowValues = uniqueValues(keyRowField.values);
 
-        const matrixValues: { [key: string]: { [key: string]: any } } = {};
+        const matrixValues: { [key: string]: { [key: string]: unknown } } = {};
 
         for (let index = 0; index < valueField.values.length; index++) {
           const columnName = keyColumnField.values[index];
@@ -78,7 +106,7 @@ export const groupingToMatrixTransformer: DataTransformerInfo<GroupingToMatrixTr
           {
             name: rowColumnField,
             values: rowValues,
-            type: FieldType.string,
+            type: keyRowField.type,
             config: {},
           },
         ];
@@ -99,7 +127,7 @@ export const groupingToMatrixTransformer: DataTransformerInfo<GroupingToMatrixTr
           }
 
           fields.push({
-            name: columnName.toString(),
+            name: columnName?.toString() ?? null,
             values: values,
             config: valueField.config,
             type: valueField.type,
@@ -117,12 +145,7 @@ export const groupingToMatrixTransformer: DataTransformerInfo<GroupingToMatrixTr
 };
 
 function uniqueValues<T>(values: T[]): T[] {
-  const unique = new Set<T>();
-
-  for (let index = 0; index < values.length; index++) {
-    unique.add(values[index]);
-  }
-
+  const unique = new Set<T>(values);
   return Array.from(unique);
 }
 
@@ -155,6 +178,8 @@ function getSpecialValue(specialValue: SpecialValue) {
       return true;
     case SpecialValue.Null:
       return null;
+    case SpecialValue.Zero:
+      return 0;
     case SpecialValue.Empty:
     default:
       return '';

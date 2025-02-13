@@ -1,9 +1,13 @@
 package migrations
 
 import (
+	dashboardFolderMigrations "github.com/grafana/grafana/pkg/services/dashboards/database/migrations"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/sqlstore/migrations/accesscontrol"
-	"github.com/grafana/grafana/pkg/services/sqlstore/migrations/oauthserver"
+	"github.com/grafana/grafana/pkg/services/sqlstore/migrations/anonservice"
+	"github.com/grafana/grafana/pkg/services/sqlstore/migrations/externalsession"
+	"github.com/grafana/grafana/pkg/services/sqlstore/migrations/signingkeys"
+	"github.com/grafana/grafana/pkg/services/sqlstore/migrations/ssosettings"
 	"github.com/grafana/grafana/pkg/services/sqlstore/migrations/ualert"
 	. "github.com/grafana/grafana/pkg/services/sqlstore/migrator"
 )
@@ -17,19 +21,21 @@ import (
 //    specifically added
 
 type OSSMigrations struct {
+	features featuremgmt.FeatureToggles
 }
 
-func ProvideOSSMigrations() *OSSMigrations {
-	return &OSSMigrations{}
+func ProvideOSSMigrations(features featuremgmt.FeatureToggles) *OSSMigrations {
+	return &OSSMigrations{features}
 }
 
-func (*OSSMigrations) AddMigration(mg *Migrator) {
+func (oss *OSSMigrations) AddMigration(mg *Migrator) {
 	mg.AddCreateMigration()
 	addUserMigrations(mg)
 	addTempUserMigrations(mg)
 	addStarMigrations(mg)
 	addOrgMigrations(mg)
 	addDashboardMigration(mg) // Do NOT add more migrations to this function.
+	addDashboardUIDStarMigrations(mg)
 	addDataSourceMigration(mg)
 	addApiKeyMigrations(mg)
 	addDashboardSnapshotMigrations(mg)
@@ -52,10 +58,9 @@ func (*OSSMigrations) AddMigration(mg *Migrator) {
 	addCacheMigration(mg)
 	addShortURLMigrations(mg)
 	ualert.AddTablesMigrations(mg)
-	ualert.AddDashAlertMigration(mg)
 	addLibraryElementsMigrations(mg)
 
-	ualert.RerunDashAlertMigration(mg)
+	ualert.FixEarlyMigration(mg)
 	addSecretsMigration(mg)
 	addKVStoreMigrations(mg)
 	ualert.AddDashboardUIDPanelIDMigration(mg)
@@ -74,7 +79,6 @@ func (*OSSMigrations) AddMigration(mg *Migrator) {
 	addEntityEventsTableMigration(mg)
 
 	addPublicDashboardMigration(mg)
-	ualert.CreateDefaultFoldersForAlertingMigration(mg)
 	addDbFileStorageMigration(mg)
 
 	accesscontrol.AddManagedPermissionsMigration(mg, accesscontrol.ManagedPermissionsMigrationID)
@@ -87,30 +91,58 @@ func (*OSSMigrations) AddMigration(mg *Migrator) {
 	accesscontrol.AddAdminOnlyMigration(mg)
 	accesscontrol.AddSeedAssignmentMigrations(mg)
 	accesscontrol.AddManagedFolderAlertActionsRepeatFixedMigration(mg)
+	accesscontrol.AddManagedFolderLibraryPanelActionsMigration(mg)
 
 	AddExternalAlertmanagerToDatasourceMigration(mg)
 
 	addFolderMigrations(mg)
-	if mg.Cfg != nil && mg.Cfg.IsFeatureToggleEnabled != nil {
-		if mg.Cfg.IsFeatureToggleEnabled(featuremgmt.FlagExternalServiceAuth) {
-			oauthserver.AddMigration(mg)
-		}
-	}
-}
 
-func addStarMigrations(mg *Migrator) {
-	starV1 := Table{
-		Name: "star",
-		Columns: []*Column{
-			{Name: "id", Type: DB_BigInt, IsPrimaryKey: true, IsAutoIncrement: true},
-			{Name: "user_id", Type: DB_BigInt, Nullable: false},
-			{Name: "dashboard_id", Type: DB_BigInt, Nullable: false},
-		},
-		Indices: []*Index{
-			{Cols: []string{"user_id", "dashboard_id"}, Type: UniqueIndex},
-		},
+	anonservice.AddMigration(mg)
+	signingkeys.AddMigration(mg)
+
+	ualert.MigrationServiceMigration(mg)
+	ualert.CreatedFoldersMigration(mg)
+
+	dashboardFolderMigrations.AddDashboardFolderMigrations(mg)
+
+	ssosettings.AddMigration(mg)
+
+	ualert.CreateOrgMigratedKVStoreEntries(mg)
+
+	// https://github.com/grafana/identity-access-team/issues/546: tracks removal of the feature toggle from the annotation permission migration
+	if oss.features != nil && oss.features.IsEnabledGlobally(featuremgmt.FlagAnnotationPermissionUpdate) {
+		accesscontrol.AddManagedDashboardAnnotationActionsMigration(mg)
 	}
 
-	mg.AddMigration("create star table", NewAddTableMigration(starV1))
-	mg.AddMigration("add unique index star.user_id_dashboard_id", NewAddIndexMigration(starV1, starV1.Indices[0]))
+	addCloudMigrationsMigrations(mg)
+
+	addKVStoreMySQLValueTypeLongTextMigration(mg)
+
+	ualert.AddRuleNotificationSettingsColumns(mg)
+
+	accesscontrol.AddAlertingScopeRemovalMigration(mg)
+
+	accesscontrol.AddManagedFolderAlertingSilencesActionsMigrator(mg)
+
+	ualert.AddRecordingRuleColumns(mg)
+
+	ualert.AddStateResolvedAtColumns(mg)
+
+	enableTraceQLStreaming(mg, oss.features != nil && oss.features.IsEnabledGlobally(featuremgmt.FlagTraceQLStreaming))
+
+	ualert.AddReceiverActionScopesMigration(mg)
+
+	ualert.AddRuleMetadata(mg)
+
+	accesscontrol.AddOrphanedMigrations(mg)
+
+	accesscontrol.AddActionSetPermissionsMigrator(mg)
+
+	externalsession.AddMigration(mg)
+
+	accesscontrol.AddReceiverCreateScopeMigration(mg)
+
+	ualert.AddAlertRuleUpdatedByMigration(mg)
+
+	ualert.AddAlertRuleStateTable(mg)
 }

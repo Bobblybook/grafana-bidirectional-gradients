@@ -115,8 +115,8 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 			url: fmt.Sprintf("/api/datasources/uid/%s/correlations", "nonexistent-ds-uid"),
 			body: fmt.Sprintf(`{
 					"targetUID": "%s",
+					"type": "query",
 					"config": {
-						"type": "query",
 						"field": "message",
 						"target": {}
 					}
@@ -133,18 +133,17 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "Data source not found", response.Message)
-		require.Equal(t, correlations.ErrSourceDataSourceDoesNotExists.Error(), response.Error)
 
 		require.NoError(t, res.Body.Close())
 	})
 
-	t.Run("inexistent target data source should result in a 404 if config.type=query", func(t *testing.T) {
+	t.Run("inexistent target data source should result in a 404 if type=query", func(t *testing.T) {
 		res := ctx.Post(PostParams{
 			url: fmt.Sprintf("/api/datasources/uid/%s/correlations", writableDs),
 			body: `{
 					"targetUID": "nonexistent-uid-uid",
+					"type": "query",
 					"config": {
-						"type": "query",
 						"field": "message",
 						"target": {}
 					}
@@ -161,7 +160,6 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "Data source not found", response.Message)
-		require.Equal(t, correlations.ErrTargetDataSourceDoesNotExists.Error(), response.Error)
 
 		require.NoError(t, res.Body.Close())
 	})
@@ -171,8 +169,8 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 			url: fmt.Sprintf("/api/datasources/uid/%s/correlations", readOnlyDS),
 			body: fmt.Sprintf(`{
 					"targetUID": "%s",
+					"type": "query",
 					"config": {
-						"type": "query",
 						"field": "message",
 						"target": {}
 					}
@@ -202,8 +200,8 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 			url: fmt.Sprintf("/api/datasources/uid/%s/correlations", writableDs),
 			body: fmt.Sprintf(`{
 					"targetUID": "%s",
+					"type": "query",
 					"config": {
-						"type": "query",
 						"field": "message",
 						"target": {}
 					}
@@ -232,7 +230,7 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 		description := "a description"
 		label := "a label"
 		fieldName := "fieldName"
-		configType := correlations.ConfigTypeQuery
+		corrType := correlations.CorrelationType("query")
 		transformation := correlations.Transformation{Type: "logfmt"}
 		transformation2 := correlations.Transformation{Type: "regex", Expression: "testExpression", MapValue: "testVar"}
 		res := ctx.Post(PostParams{
@@ -241,8 +239,8 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 					"targetUID": "%s",
 					"description": "%s",
 					"label": "%s",
+					"type": "%s",
 					"config": {
-						"type": "%s",
 						"field": "%s",
 						"target": { "expr": "foo" },
 						"transformations": [
@@ -250,7 +248,7 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 							{"type": "regex", "expression": "testExpression", "mapValue": "testVar"}
 						]
 					}
-				}`, writableDs, description, label, configType, fieldName),
+				}`, writableDs, description, label, corrType, fieldName),
 			user: adminUser,
 		})
 		require.Equal(t, http.StatusOK, res.StatusCode)
@@ -267,7 +265,7 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 		require.Equal(t, writableDs, *response.Result.TargetUID)
 		require.Equal(t, description, response.Result.Description)
 		require.Equal(t, label, response.Result.Label)
-		require.Equal(t, configType, response.Result.Config.Type)
+		require.Equal(t, corrType, response.Result.Type)
 		require.Equal(t, fieldName, response.Result.Config.Field)
 		require.Equal(t, map[string]any{"expr": "foo"}, response.Result.Config.Target)
 		require.Equal(t, transformation, response.Result.Config.Transformations[0])
@@ -357,8 +355,6 @@ func TestIntegrationCreateCorrelation(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Contains(t, response.Message, "bad request data")
-		require.Contains(t, response.Error, correlations.ErrInvalidConfigType.Error())
-		require.Contains(t, response.Error, configType)
 
 		require.NoError(t, res.Body.Close())
 	})

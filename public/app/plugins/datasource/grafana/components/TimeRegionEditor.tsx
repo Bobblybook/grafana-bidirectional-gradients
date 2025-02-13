@@ -1,15 +1,13 @@
 import { css } from '@emotion/css';
 import moment, { Moment } from 'moment/moment';
-import React, { useState } from 'react';
+import { useState } from 'react';
 
-import { getTimeZoneInfo, GrafanaTheme2, SelectableValue } from '@grafana/data';
-import { Button, Field, FieldSet, HorizontalGroup, Select, TimeZonePicker, useStyles2 } from '@grafana/ui';
+import { dateTimeAsMoment, getTimeZoneInfo, GrafanaTheme2, isDateTime, SelectableValue } from '@grafana/data';
+import { Button, Field, FieldSet, Select, Stack, TimeOfDayPicker, TimeZonePicker, useStyles2 } from '@grafana/ui';
 import { TimeZoneOffset } from '@grafana/ui/src/components/DateTimePickers/TimeZonePicker/TimeZoneOffset';
 import { TimeZoneTitle } from '@grafana/ui/src/components/DateTimePickers/TimeZonePicker/TimeZoneTitle';
 import { TimeRegionConfig } from 'app/core/utils/timeRegions';
 import { getDashboardSrv } from 'app/features/dashboard/services/DashboardSrv';
-
-import { TimePickerInput } from './TimePickerInput';
 
 interface Props {
   value: TimeRegionConfig;
@@ -74,7 +72,7 @@ export const TimeRegionEditor = ({ value, onChange }: Props) => {
     return timezone;
   };
 
-  const onTimeChange = (v: Moment, field: string) => {
+  const onTimeChange = (v: Moment | undefined, field: string) => {
     const time = v ? v.format('HH:mm') : undefined;
     if (field === 'from') {
       onChange({ ...value, from: time });
@@ -122,10 +120,13 @@ export const TimeRegionEditor = ({ value, onChange }: Props) => {
     );
   };
 
+  const from = getTime(value.from);
+  const to = getTime(value.to);
+
   return (
     <FieldSet className={styles.wrapper}>
       <Field label="From">
-        <HorizontalGroup spacing="xs">
+        <Stack gap={0.5}>
           <Select
             options={days}
             isClearable
@@ -134,17 +135,17 @@ export const TimeRegionEditor = ({ value, onChange }: Props) => {
             onChange={(v) => onFromDayOfWeekChange(v)}
             width={20}
           />
-          <TimePickerInput
-            value={getTime(value.from)}
-            onChange={(v) => onTimeChange(v, 'from')}
+          <TimeOfDayPicker
+            value={isDateTime(from) ? from : undefined}
+            onChange={(v) => onTimeChange(v ? dateTimeAsMoment(v) : v, 'from')}
             allowEmpty={true}
             placeholder="HH:mm"
-            width={100}
+            size="sm"
           />
-        </HorizontalGroup>
+        </Stack>
       </Field>
       <Field label="To">
-        <HorizontalGroup spacing="xs">
+        <Stack gap={0.5}>
           {(value.fromDayOfWeek || value.toDayOfWeek) && (
             <Select
               options={days}
@@ -155,14 +156,14 @@ export const TimeRegionEditor = ({ value, onChange }: Props) => {
               width={20}
             />
           )}
-          <TimePickerInput
-            value={getTime(value.to)}
-            onChange={(v) => onTimeChange(v, 'to')}
+          <TimeOfDayPicker
+            value={isDateTime(to) ? to : undefined}
+            onChange={(v) => onTimeChange(v ? dateTimeAsMoment(v) : v, 'to')}
             allowEmpty={true}
             placeholder="HH:mm"
-            width={100}
+            size="sm"
           />
-        </HorizontalGroup>
+        </Stack>
       </Field>
       <Field label="Timezone">{renderTimezone()}</Field>
     </FieldSet>
@@ -175,16 +176,16 @@ const getStyles = (theme: GrafanaTheme2) => {
       maxWidth: theme.spacing(60),
       marginBottom: theme.spacing(2),
     }),
-    timezoneContainer: css`
-      padding: 5px;
-      display: flex;
-      flex-direction: row;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 12px;
-    `,
-    timezone: css`
-      margin-right: 5px;
-    `,
+    timezoneContainer: css({
+      padding: '5px',
+      display: 'flex',
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      fontSize: '12px',
+    }),
+    timezone: css({
+      marginRight: '5px',
+    }),
   };
 };

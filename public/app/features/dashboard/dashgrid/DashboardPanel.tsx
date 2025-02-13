@@ -1,11 +1,12 @@
-import React, { PureComponent } from 'react';
+import { PureComponent } from 'react';
 import { connect, ConnectedProps } from 'react-redux';
 
 import { StoreState } from 'app/types';
 
 import { initPanelState } from '../../panel/state/actions';
 import { setPanelInstanceState } from '../../panel/state/reducers';
-import { DashboardModel, PanelModel } from '../state';
+import { DashboardModel } from '../state/DashboardModel';
+import { PanelModel } from '../state/PanelModel';
 
 import { LazyLoader } from './LazyLoader';
 import { PanelChromeAngular } from './PanelChromeAngular';
@@ -28,7 +29,7 @@ export interface OwnProps {
 const mapStateToProps = (state: StoreState, props: OwnProps) => {
   const panelState = state.panels[props.stateKey];
   if (!panelState) {
-    return { plugin: null };
+    return { plugin: undefined };
   }
 
   return {
@@ -58,7 +59,7 @@ export class DashboardPanelUnconnected extends PureComponent<Props> {
     }
   }
 
-  onInstanceStateChange = (value: any) => {
+  onInstanceStateChange = (value: unknown) => {
     this.props.setPanelInstanceState({ key: this.props.stateKey, value });
   };
 

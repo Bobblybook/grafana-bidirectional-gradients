@@ -1,22 +1,28 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/influxdata/influxql"
+)
 
 type Query struct {
-	Measurement string
-	Policy      string
-	Tags        []*Tag
-	GroupBy     []*QueryPart
-	Selects     []*Select
-	RawQuery    string
-	UseRawQuery bool
-	Alias       string
-	Interval    time.Duration
-	Tz          string
-	Limit       string
-	Slimit      string
-	OrderByTime string
-	RefID       string
+	Measurement  string
+	Policy       string
+	Tags         []*Tag
+	GroupBy      []*QueryPart
+	Selects      []*Select
+	RawQuery     string
+	UseRawQuery  bool
+	Alias        string
+	Interval     time.Duration
+	Tz           string
+	Limit        string
+	Slimit       string
+	OrderByTime  string
+	RefID        string
+	ResultFormat string
+	Statement    influxql.Statement
 }
 
 type Tag struct {
@@ -31,6 +37,8 @@ type Select []QueryPart
 type Response struct {
 	Results []Result
 	Error   string
+	Code    string
+	Message string
 }
 
 type Result struct {

@@ -1,4 +1,4 @@
-import { DataLinkTransformationConfig } from '@grafana/data';
+import { CorrelationExternal, CorrelationQuery } from '@grafana/runtime';
 
 export interface AddCorrelationResponse {
   correlation: Correlation;
@@ -26,29 +26,16 @@ export interface RemoveCorrelationResponse {
   message: string;
 }
 
-type CorrelationConfigType = 'query';
+export type CorrelationType = 'query' | 'external';
 
-export interface CorrelationConfig {
-  field: string;
-  target: object;
-  type: CorrelationConfigType;
-  transformations?: DataLinkTransformationConfig[];
-}
-
-export interface Correlation {
-  uid: string;
-  sourceUID: string;
-  targetUID: string;
-  label?: string;
-  description?: string;
-  provisioned: boolean;
-  config: CorrelationConfig;
-}
+export type Correlation = CorrelationExternal | CorrelationQuery;
 
 export type GetCorrelationsParams = {
   page: number;
 };
 
+export type OmitUnion<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+
 export type RemoveCorrelationParams = Pick<Correlation, 'sourceUID' | 'uid'>;
-export type CreateCorrelationParams = Omit<Correlation, 'uid' | 'provisioned'>;
-export type UpdateCorrelationParams = Omit<Correlation, 'targetUID' | 'provisioned'>;
+export type CreateCorrelationParams = OmitUnion<Correlation, 'uid' | 'provisioned'>;
+export type UpdateCorrelationParams = OmitUnion<Correlation, 'targetUID' | 'provisioned'>;

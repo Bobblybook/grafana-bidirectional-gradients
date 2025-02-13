@@ -3,7 +3,6 @@ import { sortBy } from 'lodash';
 
 import {
   Identifier,
-  JsonExpressionParser,
   LabelFilter,
   LabelParser,
   LineComment,
@@ -17,13 +16,19 @@ import {
   UnwrapExpr,
   String,
   PipelineStage,
+  LogfmtParser,
+  JsonExpressionParser,
+  LogfmtExpressionParser,
+  Expr,
+  LabelFormatExpr,
 } from '@grafana/lezer-logql';
-
-import { QueryBuilderLabelFilter } from '../prometheus/querybuilder/shared/types';
+import { QueryBuilderLabelFilter } from '@grafana/plugin-ui';
 
 import { unescapeLabelValue } from './languageUtils';
+import { getNodePositionsFromQuery } from './queryUtils';
 import { lokiQueryModeller as modeller } from './querybuilder/LokiQueryModeller';
 import { buildVisualQueryFromString, handleQuotes } from './querybuilder/parsing';
+import { LabelType } from './types';
 
 export class NodePosition {
   from: number;
@@ -138,21 +143,15 @@ function getMatchersWithFilter(query: string, label: string, operator: string, v
  *
  * This operates on substrings of the query with labels and operates just on those. This makes this
  * more robust and can alter even invalid queries, and preserves in general the query structure and whitespace.
- *
- * @param {string} query
- * @param {string} key
- * @param {string} operator
- * @param {string} value
- * @param {boolean} [forceAsLabelFilter=false]  - if true, it will add a LabelFilter expression even if there is no parser in the query
  */
 export function addLabelToQuery(
   query: string,
   key: string,
   operator: string,
   value: string,
-  forceAsLabelFilter = false
+  labelType?: LabelType | null
 ): string {
-  if (!key || !value) {
+  if (!key) {
     throw new Error('Need label to add to query.');
   }
 
@@ -161,34 +160,72 @@ export function addLabelToQuery(
     return query;
   }
 
+  const parserPositions = getParserPositions(query);
+  const labelFilterPositions = getLabelFilterPositions(query);
   const hasStreamSelectorMatchers = getMatcherInStreamPositions(query);
+  // For non-indexed labels we want to add them after label_format to, for example, allow ad-hoc filters to use formatted labels
+  const labelFormatPositions = getNodePositionsFromQuery(query, [LabelFormatExpr]);
+
+  // If the label type wasn't passed in from the calling function, we can use lezer to figure out if this label is already in the stream selectors
+  if (!labelType) {
+    const identifierSelectorMatchers = getIdentifierInStreamPositions(query);
+    const indexedKeys = identifierSelectorMatchers.map((match) => match.getExpression(query));
+    if (indexedKeys.includes(key)) {
+      labelType = LabelType.Indexed;
+    }
+  }
+
   const everyStreamSelectorHasMatcher = streamSelectorPositions.every((streamSelectorPosition) =>
     hasStreamSelectorMatchers.some(
       (matcherPosition) =>
         matcherPosition.from >= streamSelectorPosition.from && matcherPosition.to <= streamSelectorPosition.to
     )
   );
-  const parserPositions = getParserPositions(query);
-  const labelFilterPositions = getLabelFilterPositions(query);
 
   const filter = toLabelFilter(key, value, operator);
-  // If we have non-empty stream selector and parser/label filter, we want to add a new label filter after the last one.
-  // If some of the stream selectors don't have matchers, we want to add new matcher to the all stream selectors.
-  if (forceAsLabelFilter) {
-    // `forceAsLabelFilter` is mostly used for structured metadata labels. Those are not
-    // very well distinguishable from real labels, but need to be added as label
-    // filters after the last stream selector, parser or label filter. This is
-    // just a quickfix for now and still has edge-cases where it can fail.
-    // TODO: improve this once we have a better API in Loki to distinguish
-    // between the origins of labels.
-    const positionToAdd = findLastPosition([...streamSelectorPositions, ...labelFilterPositions, ...parserPositions]);
-    return addFilterAsLabelFilter(query, [positionToAdd], filter);
-  } else if (everyStreamSelectorHasMatcher && (labelFilterPositions.length || parserPositions.length)) {
-    const positionToAdd = findLastPosition([...labelFilterPositions, ...parserPositions]);
-    return addFilterAsLabelFilter(query, [positionToAdd], filter);
-  } else {
+  if (labelType === LabelType.Parsed || labelType === LabelType.StructuredMetadata) {
+    const lastPositionsPerExpression = getLastPositionPerExpression(query, [
+      ...streamSelectorPositions,
+      ...labelFilterPositions,
+      ...parserPositions,
+      ...labelFormatPositions,
+    ]);
+
+    return addFilterAsLabelFilter(query, lastPositionsPerExpression, filter);
+  } else if (labelType === LabelType.Indexed) {
     return addFilterToStreamSelector(query, streamSelectorPositions, filter);
+  } else {
+    // labelType is not set, so we need to figure out where to add the label
+    // if we don't have a parser, or have empty stream selectors, we will just add it to the stream selector
+    if (parserPositions.length === 0 || everyStreamSelectorHasMatcher === false) {
+      return addFilterToStreamSelector(query, streamSelectorPositions, filter);
+    } else {
+      // If `labelType` is not set, it indicates a potential metric query (`labelType` is present only in log queries that came from a Loki instance supporting the `categorize-labels` API). In case we are not adding the label to stream selectors we need to find the last position to add in each expression.
+      // E.g. in `sum(rate({foo="bar"} | logfmt [$__auto])) / sum(rate({foo="baz"} | logfmt [$__auto]))` we need to add the label at two places.
+      const lastPositionsPerExpression = getLastPositionPerExpression(query, [
+        ...parserPositions,
+        ...labelFilterPositions,
+        ...labelFormatPositions,
+      ]);
+
+      return addFilterAsLabelFilter(query, lastPositionsPerExpression, filter);
+    }
   }
+}
+
+function getLastPositionPerExpression(query: string, positions: NodePosition[]): NodePosition[] {
+  const subExpressions = findLeaves(getNodePositionsFromQuery(query, [Expr]));
+  const subPositions = [...positions];
+
+  // find last position for each subexpression
+  const lastPositionsPerExpression = subExpressions.map((subExpression) => {
+    return findLastPosition(
+      subPositions.filter((p) => {
+        return subExpression.contains(p);
+      })
+    );
+  });
+  return lastPositionsPerExpression;
 }
 
 /**
@@ -202,14 +239,60 @@ export function addParserToQuery(query: string, parser: string): string {
   const lineFilterPositions = getLineFiltersPositions(query);
 
   if (lineFilterPositions.length) {
-    return addParser(query, lineFilterPositions, parser);
+    return appendToLogsQuery(query, lineFilterPositions, parser);
   } else {
     const streamSelectorPositions = getStreamSelectorPositions(query);
     if (!streamSelectorPositions.length) {
       return query;
     }
-    return addParser(query, streamSelectorPositions, parser);
+    return appendToLogsQuery(query, streamSelectorPositions, parser);
   }
+}
+
+/**
+ * Adds a drop statement to the query.
+ * It uses LogQL parser to find instances of stream selectors or line filters and adds parser after them.
+ *
+ * @param query
+ * @param parser
+ */
+export function addDropToQuery(query: string, labelsToDrop: string[]): string {
+  const lineFilterPositions = getLineFiltersPositions(query);
+
+  if (lineFilterPositions.length) {
+    return appendToLogsQuery(query, lineFilterPositions, `drop ${labelsToDrop.join(', ')}`);
+  } else {
+    const streamSelectorPositions = getStreamSelectorPositions(query);
+    if (!streamSelectorPositions.length) {
+      return query;
+    }
+    return appendToLogsQuery(query, streamSelectorPositions, `drop ${labelsToDrop.join(', ')}`);
+  }
+}
+
+/**
+ * Adds a statement after line filters or stream selectors
+ * @param query
+ * @param queryPartPositions
+ * @param parser
+ */
+function appendToLogsQuery(query: string, queryPartPositions: NodePosition[], statement: string): string {
+  let newQuery = '';
+  let prev = 0;
+
+  for (let i = 0; i < queryPartPositions.length; i++) {
+    // Splice on a string for each matched vector selector
+    const match = queryPartPositions[i];
+    const isLast = i === queryPartPositions.length - 1;
+
+    const start = query.substring(prev, match.to);
+    const end = isLast ? query.substring(match.to) : '';
+
+    // Add parser
+    newQuery += start + ` | ${statement}` + end;
+    prev = match.to;
+  }
+  return newQuery;
 }
 
 /**
@@ -271,23 +354,10 @@ export function getStreamSelectorPositions(query: string): NodePosition[] {
   const tree = parser.parse(query);
   const positions: NodePosition[] = [];
   tree.iterate({
-    enter: ({ type, from, to }): false | void => {
+    enter: ({ type, node }): false | void => {
       if (type.id === Selector) {
-        positions.push(new NodePosition(from, to, type));
+        positions.push(NodePosition.fromNode(node));
         return false;
-      }
-    },
-  });
-  return positions;
-}
-
-function getMatcherInStreamPositions(query: string): NodePosition[] {
-  const tree = parser.parse(query);
-  const positions: NodePosition[] = [];
-  tree.iterate({
-    enter: ({ node }): false | void => {
-      if (node.type.id === Selector) {
-        positions.push(...getAllPositionsInNodeByType(query, node, Matcher));
       }
     },
   });
@@ -301,10 +371,11 @@ function getMatcherInStreamPositions(query: string): NodePosition[] {
 export function getParserPositions(query: string): NodePosition[] {
   const tree = parser.parse(query);
   const positions: NodePosition[] = [];
+  const parserNodeTypes = [LabelParser, JsonExpressionParser, LogfmtParser, LogfmtExpressionParser];
   tree.iterate({
-    enter: ({ type, from, to }): false | void => {
-      if (type.id === LabelParser || type.id === JsonExpressionParser) {
-        positions.push(new NodePosition(from, to, type));
+    enter: ({ type, node }): false | void => {
+      if (parserNodeTypes.includes(type.id)) {
+        positions.push(NodePosition.fromNode(node));
         return false;
       }
     },
@@ -320,9 +391,9 @@ export function getLabelFilterPositions(query: string): NodePosition[] {
   const tree = parser.parse(query);
   const positions: NodePosition[] = [];
   tree.iterate({
-    enter: ({ type, from, to }): false | void => {
+    enter: ({ type, node }): false | void => {
       if (type.id === LabelFilter) {
-        positions.push(new NodePosition(from, to, type));
+        positions.push(NodePosition.fromNode(node));
         return false;
       }
     },
@@ -338,9 +409,9 @@ function getLineFiltersPositions(query: string): NodePosition[] {
   const tree = parser.parse(query);
   const positions: NodePosition[] = [];
   tree.iterate({
-    enter: ({ type, from, to }): false | void => {
+    enter: ({ type, node }): false | void => {
       if (type.id === LineFilters) {
-        positions.push(new NodePosition(from, to, type));
+        positions.push(NodePosition.fromNode(node));
         return false;
       }
     },
@@ -356,9 +427,9 @@ function getLogQueryPositions(query: string): NodePosition[] {
   const tree = parser.parse(query);
   const positions: NodePosition[] = [];
   tree.iterate({
-    enter: ({ type, from, to, node }): false | void => {
+    enter: ({ type, node }): false | void => {
       if (type.id === LogExpr) {
-        positions.push(new NodePosition(from, to, type));
+        positions.push(NodePosition.fromNode(node));
         return false;
       }
 
@@ -470,31 +541,6 @@ export function addFilterAsLabelFilter(
 }
 
 /**
- * Add parser after line filter or stream selector
- * @param query
- * @param queryPartPositions
- * @param parser
- */
-function addParser(query: string, queryPartPositions: NodePosition[], parser: string): string {
-  let newQuery = '';
-  let prev = 0;
-
-  for (let i = 0; i < queryPartPositions.length; i++) {
-    // Splice on a string for each matched vector selector
-    const match = queryPartPositions[i];
-    const isLast = i === queryPartPositions.length - 1;
-
-    const start = query.substring(prev, match.to);
-    const end = isLast ? query.substring(match.to) : '';
-
-    // Add parser
-    newQuery += start + ` | ${parser}` + end;
-    prev = match.to;
-  }
-  return newQuery;
-}
-
-/**
  * Add filter as label filter after the parsers
  * @param query
  * @param logQueryPositions
@@ -523,14 +569,14 @@ function addLabelFormat(
   return newQuery;
 }
 
-export function addLineFilter(query: string): string {
+export function addLineFilter(query: string, value = '', operator = '|='): string {
   const streamSelectorPositions = getStreamSelectorPositions(query);
   if (!streamSelectorPositions.length) {
     return query;
   }
   const streamSelectorEnd = streamSelectorPositions[0].to;
 
-  const newQueryExpr = query.slice(0, streamSelectorEnd) + ' |= ``' + query.slice(streamSelectorEnd);
+  const newQueryExpr = query.slice(0, streamSelectorEnd) + ` ${operator} \`${value}\`` + query.slice(streamSelectorEnd);
   return newQueryExpr;
 }
 
@@ -562,10 +608,23 @@ function labelExists(labels: QueryBuilderLabelFilter[], filter: QueryBuilderLabe
  * @param positions
  */
 export function findLastPosition(positions: NodePosition[]): NodePosition {
+  if (!positions.length) {
+    return new NodePosition(0, 0);
+  }
   return positions.reduce((prev, current) => (prev.to > current.to ? prev : current));
 }
 
-function getAllPositionsInNodeByType(query: string, node: SyntaxNode, type: number): NodePosition[] {
+/**
+ * Gets all leaves of the nodes given. Leaves are nodes that don't contain any other nodes.
+ *
+ * @param {NodePosition[]} nodes
+ * @return
+ */
+function findLeaves(nodes: NodePosition[]): NodePosition[] {
+  return nodes.filter((node) => nodes.every((n) => node.contains(n) === false || node === n));
+}
+
+function getAllPositionsInNodeByType(node: SyntaxNode, type: number): NodePosition[] {
   if (node.type.id === type) {
     return [NodePosition.fromNode(node)];
   }
@@ -574,9 +633,35 @@ function getAllPositionsInNodeByType(query: string, node: SyntaxNode, type: numb
   let pos = 0;
   let child = node.childAfter(pos);
   while (child) {
-    positions.push(...getAllPositionsInNodeByType(query, child, type));
+    positions.push(...getAllPositionsInNodeByType(child, type));
     pos = child.to;
     child = node.childAfter(pos);
   }
+  return positions;
+}
+
+function getMatcherInStreamPositions(query: string): NodePosition[] {
+  const tree = parser.parse(query);
+  const positions: NodePosition[] = [];
+  tree.iterate({
+    enter: ({ node }): false | void => {
+      if (node.type.id === Selector) {
+        positions.push(...getAllPositionsInNodeByType(node, Matcher));
+      }
+    },
+  });
+  return positions;
+}
+
+export function getIdentifierInStreamPositions(query: string): NodePosition[] {
+  const tree = parser.parse(query);
+  const positions: NodePosition[] = [];
+  tree.iterate({
+    enter: ({ node }): false | void => {
+      if (node.type.id === Selector) {
+        positions.push(...getAllPositionsInNodeByType(node, Identifier));
+      }
+    },
+  });
   return positions;
 }

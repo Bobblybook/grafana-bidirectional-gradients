@@ -1,11 +1,10 @@
 import { isNumber } from 'lodash';
 
-import { dateTime, isDateTimeInput } from '../datetime';
+import { isDateTimeInput, dateTime } from '../datetime/moment_wrapper';
 import { Field, FieldType } from '../types/dataFrame';
 
 type IndexComparer = (a: number, b: number) => number;
 
-/** @public */
 export const fieldIndexComparer = (field: Field, reverse = false): IndexComparer => {
   const values = field.values;
 
@@ -26,8 +25,7 @@ export const fieldIndexComparer = (field: Field, reverse = false): IndexComparer
   }
 };
 
-/** @public */
-export const timeComparer = (a: unknown, b: unknown): number => {
+const timeComparer = (a: unknown, b: unknown): number => {
   if (!a || !b) {
     return falsyComparer(a, b);
   }
@@ -49,20 +47,23 @@ export const timeComparer = (a: unknown, b: unknown): number => {
   return 0;
 };
 
-/** @public */
-export const numericComparer = (a: number, b: number): number => {
+const numericComparer = (a: number, b: number): number => {
   return a - b;
 };
 
-/** @public */
-export const stringComparer = (a: string, b: string): number => {
+// Using the Intl.Collator object compare method results in much faster
+// string sorting than .localeCompare
+const compare = new Intl.Collator('en', { sensitivity: 'base' }).compare;
+
+const stringComparer = (a: string, b: string): number => {
   if (!a || !b) {
     return falsyComparer(a, b);
   }
-  return a.localeCompare(b);
+
+  return compare(String(a), String(b));
 };
 
-export const booleanComparer = (a: boolean, b: boolean): number => {
+const booleanComparer = (a: boolean, b: boolean): number => {
   return falsyComparer(a, b);
 };
 

@@ -1,15 +1,21 @@
+import { Observable, of } from 'rxjs';
+
 import {
+  DataQuery,
+  DataQueryRequest,
+  DataQueryResponse,
   DataSourceApi,
   DataSourceInstanceSettings,
   DataSourcePlugin,
   DataSourcePluginMeta,
   ScopedVars,
 } from '@grafana/data';
+import { RuntimeDataSource, TemplateSrv } from '@grafana/runtime';
 import { ExpressionDatasourceRef } from '@grafana/runtime/src/utils/DataSourceWithBackend';
 import { DatasourceSrv, getNameOrUid } from 'app/features/plugins/datasource_srv';
 
 // Datasource variable $datasource with current value 'BBB'
-const templateSrv: any = {
+const templateSrv = {
   getVariables: () => [
     {
       type: 'datasource',
@@ -43,10 +49,16 @@ const templateSrv: any = {
     result = result.replace('${datasourceDefault}', 'default');
     return result;
   },
-};
+} as TemplateSrv;
 
 class TestDataSource {
   constructor(public instanceSettings: DataSourceInstanceSettings) {}
+}
+
+class TestRuntimeDataSource extends RuntimeDataSource {
+  query(request: DataQueryRequest<DataQuery>): Promise<DataQueryResponse> | Observable<DataQueryResponse> {
+    return of({ data: [] });
+  }
 }
 
 jest.mock('../plugin_loader', () => ({
@@ -75,7 +87,7 @@ describe('datasource_srv', () => {
       type: 'test-db',
       name: 'mmm',
       uid: 'uid-code-mmm',
-      meta: { metrics: true, annotations: true } as any,
+      meta: { metrics: true, annotations: true },
     },
     '-- Grafana --': {
       type: 'grafana',
@@ -129,9 +141,22 @@ describe('datasource_srv', () => {
       uid: 'no-query',
       meta: { id: 'no-query' },
     },
+    TestData: {
+      type: 'grafana-testdata-datasource',
+      name: 'TestData',
+      meta: { metrics: true, id: 'grafana-testdata-datasource', aliasIDs: ['testdata'] },
+    },
   };
 
   describe('Given a list of data sources', () => {
+    const runtimeDataSource = new TestRuntimeDataSource('grafana-runtime-datasource', 'uuid-runtime-ds');
+
+    beforeAll(() => {
+      dataSourceSrv.registerRuntimeDataSource({
+        dataSource: runtimeDataSource,
+      });
+    });
+
     beforeEach(() => {
       dataSourceSrv.init(dataSourceInit as any, 'BBB');
     });
@@ -164,7 +189,7 @@ describe('datasource_srv', () => {
       });
 
       it('Can get by variable', async () => {
-        const ds = (await dataSourceSrv.get('${datasource}')) as any;
+        const ds = await dataSourceSrv.get('${datasource}');
         expect(ds.meta).toBe(dataSourceInit.BBB.meta);
 
         const ds2 = await dataSourceSrv.get('${datasource}', { datasource: { text: 'Prom', value: 'uid-code-aaa' } });
@@ -245,6 +270,16 @@ describe('datasource_srv', () => {
         expect(exprWithName?.uid).toBe(ExpressionDatasourceRef.uid);
         expect(exprWithName?.type).toBe(ExpressionDatasourceRef.type);
       });
+
+      it('should return settings for runtime datasource when called with uid', () => {
+        const settings = dataSourceSrv.getInstanceSettings(runtimeDataSource.uid);
+        expect(settings).toBe(runtimeDataSource.instanceSettings);
+      });
+
+      it('should not return settings for runtime datasource when called with name', () => {
+        const settings = dataSourceSrv.getInstanceSettings(runtimeDataSource.name);
+        expect(settings).toBe(undefined);
+      });
     });
 
     describe('when loading datasource', () => {
@@ -273,7 +308,7 @@ describe('datasource_srv', () => {
     describe('when getting external metric sources', () => {
       it('should return list of explore sources', () => {
         const externalSources = dataSourceSrv.getExternal();
-        expect(externalSources.length).toBe(7);
+        expect(externalSources.length).toBe(8);
       });
     });
 
@@ -291,6 +326,11 @@ describe('datasource_srv', () => {
       expect(list[2].name).toBe('${datasource}');
     });
 
+    it('Should filter out the -- Grafana -- datasource', () => {
+      const list = dataSourceSrv.getList({ filter: (x) => x.name !== '-- Grafana --' });
+      expect(list.find((x) => x.name === '-- Grafana --')).toBeUndefined();
+    });
+
     it('Can get list of data sources with tracing: true', () => {
       const list = dataSourceSrv.getList({ tracing: true });
       expect(list[0].name).toBe('Jaeger');
@@ -301,9 +341,22 @@ describe('datasource_srv', () => {
       expect(list[0].name).toBe('mmm');
     });
 
-    it('Can get get list and filter by pluginId', () => {
-      const list = dataSourceSrv.getList({ pluginId: 'jaeger' });
-      expect(list[0].name).toBe('Jaeger');
+    describe('get list filtered by plugin Id', () => {
+      it('should list all data sources for specified plugin id', () => {
+        const list = dataSourceSrv.getList({ pluginId: 'jaeger' });
+        expect(list.length).toBe(1);
+        expect(list[0].name).toBe('Jaeger');
+      });
+
+      it('should not include runtime datasources in list', () => {
+        const list = dataSourceSrv.getList({ pluginId: 'grafana-runtime-datasource' });
+        expect(list.length).toBe(0);
+      });
+    });
+
+    it('Can get get list and filter by an alias', () => {
+      const list = dataSourceSrv.getList({ pluginId: 'testdata' });
+      expect(list[0].name).toBe('TestData');
       expect(list.length).toBe(1);
     });
 
@@ -343,6 +396,18 @@ describe('datasource_srv', () => {
             "name": "mmm",
             "type": "test-db",
             "uid": "uid-code-mmm",
+          },
+          {
+            "meta": {
+              "aliasIDs": [
+                "testdata",
+              ],
+              "id": "grafana-testdata-datasource",
+              "metrics": true,
+            },
+            "name": "TestData",
+            "type": "grafana-testdata-datasource",
+            "uid": "TestData",
           },
           {
             "meta": {
@@ -386,20 +451,58 @@ describe('datasource_srv', () => {
       `);
     });
 
-    it('Should reload the datasource', async () => {
-      // arrange
-      getBackendSrvGetMock.mockReturnValueOnce({
-        datasources: {
-          ...dataSourceInit,
-        },
-        defaultDatasource: 'aaa',
+    describe('when calling reload', () => {
+      it('should reload the datasource list', async () => {
+        // arrange
+        getBackendSrvGetMock.mockReturnValueOnce({
+          datasources: {
+            ...dataSourceInit,
+          },
+          defaultDatasource: 'aaa',
+        });
+        const initMock = jest.spyOn(dataSourceSrv, 'init').mockImplementation(() => {});
+        // act
+        await dataSourceSrv.reload();
+        // assert
+        expect(getBackendSrvGetMock).toHaveBeenCalledWith('/api/frontend/settings');
+        expect(initMock).toHaveBeenCalledWith(dataSourceInit, 'aaa');
       });
-      const initMock = jest.spyOn(dataSourceSrv, 'init').mockImplementation(() => {});
-      // act
-      await dataSourceSrv.reload();
-      // assert
-      expect(getBackendSrvGetMock).toHaveBeenCalledWith('/api/frontend/settings');
-      expect(initMock).toHaveBeenCalledWith(dataSourceInit, 'aaa');
+
+      it('should still be possible to get registered runtime data source', async () => {
+        getBackendSrvGetMock.mockReturnValueOnce({
+          datasources: {
+            ...dataSourceInit,
+          },
+          defaultDatasource: 'aaa',
+        });
+
+        await dataSourceSrv.reload();
+        const ds = await dataSourceSrv.get(runtimeDataSource.getRef());
+        expect(ds).toBe(runtimeDataSource);
+      });
+    });
+
+    describe('when registering runtime datasources', () => {
+      it('should have registered a runtime datasource', async () => {
+        const ds = await dataSourceSrv.get(runtimeDataSource.getRef());
+        expect(ds).toBe(runtimeDataSource);
+      });
+
+      it('should throw when trying to re-register a runtime datasource', () => {
+        expect(() =>
+          dataSourceSrv.registerRuntimeDataSource({
+            dataSource: runtimeDataSource,
+          })
+        ).toThrow();
+      });
+
+      it('should throw when trying to register a runtime datasource with the same uid as an "regular" datasource', async () => {
+        expect(() =>
+          dataSourceSrv.registerRuntimeDataSource({
+            dataSource: new TestRuntimeDataSource('grafana-runtime-datasource', 'uid-code-Jaeger'),
+          })
+        ).toThrow();
+      });
     });
   });
 

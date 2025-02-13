@@ -4,50 +4,17 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/folder"
+	"github.com/grafana/grafana/pkg/services/search/model"
 	"github.com/grafana/grafana/pkg/services/sqlstore/migrator"
 )
-
-// FilterWhere limits the set of dashboard IDs to the dashboards for
-// which the filter is applicable. Results where the first value is
-// an empty string are discarded.
-type FilterWhere interface {
-	Where() (string, []any)
-}
-
-// FilterWith returns any recursive CTE queries (if supported)
-// and their parameters
-type FilterWith interface {
-	With() (string, []any)
-}
-
-// FilterGroupBy should be used after performing an outer join on the
-// search result to ensure there is only one of each ID in the results.
-// The id column must be present in the result.
-type FilterGroupBy interface {
-	GroupBy() (string, []any)
-}
-
-// FilterOrderBy provides an ordering for the search result.
-type FilterOrderBy interface {
-	OrderBy() string
-}
-
-// FilterLeftJoin adds the returned string as a "LEFT OUTER JOIN" to
-// allow for fetching extra columns from a table outside of the
-// dashboard column.
-type FilterLeftJoin interface {
-	LeftJoin() string
-}
-
-type FilterSelect interface {
-	Select() string
-}
 
 const (
 	TypeFolder      = "dash-folder"
 	TypeDashboard   = "dash-db"
 	TypeAlertFolder = "dash-folder-alerting"
+	TypeAnnotation  = "dash-annotation"
 )
 
 type TypeFilter struct {
@@ -93,9 +60,10 @@ func (f FolderFilter) Where() (string, []any) {
 }
 
 type FolderUIDFilter struct {
-	Dialect migrator.Dialect
-	OrgID   int64
-	UIDs    []string
+	Dialect              migrator.Dialect
+	OrgID                int64
+	UIDs                 []string
+	NestedFoldersEnabled bool
 }
 
 func (f FolderUIDFilter) Where() (string, []any) {
@@ -119,20 +87,35 @@ func (f FolderUIDFilter) Where() (string, []any) {
 		// do nothing
 	case len(params) == 1:
 		q = "dashboard.folder_id IN (SELECT id FROM dashboard WHERE org_id = ? AND uid = ?)"
+		if f.NestedFoldersEnabled {
+			q = "dashboard.org_id = ? AND dashboard.folder_uid = ?"
+		}
 		params = append([]any{f.OrgID}, params...)
 	default:
 		sqlArray := "(?" + strings.Repeat(",?", len(params)-1) + ")"
 		q = "dashboard.folder_id IN (SELECT id FROM dashboard WHERE org_id = ? AND uid IN " + sqlArray + ")"
+		if f.NestedFoldersEnabled {
+			q = "dashboard.org_id = ? AND dashboard.folder_uid IN " + sqlArray
+		}
 		params = append([]any{f.OrgID}, params...)
 	}
 
 	if includeGeneral {
 		if q == "" {
-			q = "dashboard.folder_id = ? "
+			if f.NestedFoldersEnabled {
+				q = "dashboard.folder_uid IS NULL "
+			} else {
+				q = "dashboard.folder_id = ? "
+				params = append(params, 0)
+			}
 		} else {
-			q = "(" + q + " OR dashboard.folder_id = ?)"
+			if f.NestedFoldersEnabled {
+				q = "(" + q + " OR dashboard.folder_uid IS NULL)"
+			} else {
+				q = "(" + q + " OR dashboard.folder_id = ?)"
+				params = append(params, 0)
+			}
 		}
-		params = append(params, 0)
 	}
 
 	return q, params
@@ -152,6 +135,14 @@ type DashboardFilter struct {
 
 func (f DashboardFilter) Where() (string, []any) {
 	return sqlUIDin("dashboard.uid", f.UIDs)
+}
+
+type K6FolderFilter struct{}
+
+func (f K6FolderFilter) Where() (string, []any) {
+	filter := "dashboard.uid != ? AND (dashboard.folder_uid != ? OR dashboard.folder_uid IS NULL)"
+	params := []any{accesscontrol.K6FolderUID, accesscontrol.K6FolderUID}
+	return filter, params
 }
 
 type TagsFilter struct {
@@ -220,8 +211,20 @@ func sqlUIDin(column string, uids []string) (string, []any) {
 type FolderWithAlertsFilter struct {
 }
 
-var _ FilterWhere = &FolderWithAlertsFilter{}
+var _ model.FilterWhere = &FolderWithAlertsFilter{}
 
 func (f FolderWithAlertsFilter) Where() (string, []any) {
 	return "EXISTS (SELECT 1 FROM alert_rule WHERE alert_rule.namespace_uid = dashboard.uid)", nil
+}
+
+type DeletedFilter struct {
+	Deleted bool
+}
+
+func (f DeletedFilter) Where() (string, []any) {
+	if f.Deleted {
+		return "dashboard.deleted IS NOT NULL", nil
+	}
+
+	return "dashboard.deleted IS NULL", nil
 }

@@ -1,14 +1,14 @@
-import { getActiveThreshold } from '../field';
+import { getActiveThreshold } from '../field/thresholds';
 import { stringToJsRegex } from '../text/string';
+import { ThresholdsConfig } from '../types/thresholds';
 import {
   MappingType,
   SpecialValueMatch,
-  ThresholdsConfig,
+  SpecialValueOptions,
   ValueMap,
   ValueMapping,
   ValueMappingResult,
-  SpecialValueOptions,
-} from '../types';
+} from '../types/valueMapping';
 
 export function getValueMappingResult(valueMappings: ValueMapping[], value: any): ValueMappingResult | null {
   for (const vm of valueMappings) {
@@ -30,7 +30,7 @@ export function getValueMappingResult(valueMappings: ValueMapping[], value: any)
           continue;
         }
 
-        const valueAsNumber = parseFloat(value as string);
+        const valueAsNumber = parseFloat(value);
         if (isNaN(valueAsNumber)) {
           continue;
         }
@@ -76,13 +76,13 @@ export function getValueMappingResult(valueMappings: ValueMapping[], value: any)
             break;
           }
           case SpecialValueMatch.NaN: {
-            if (isNaN(value as number)) {
+            if (typeof value === 'number' && isNaN(value)) {
               return vm.options.result;
             }
             break;
           }
           case SpecialValueMatch.NullAndNaN: {
-            if (isNaN(value as number) || value == null) {
+            if ((typeof value === 'number' && isNaN(value)) || value == null) {
               return vm.options.result;
             }
             break;

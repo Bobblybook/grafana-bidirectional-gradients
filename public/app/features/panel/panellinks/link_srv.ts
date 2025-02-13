@@ -20,11 +20,8 @@ import {
   VariableSuggestionsScope,
 } from '@grafana/data';
 import { getTemplateSrv } from '@grafana/runtime';
-import { VariableFormatID } from '@grafana/schema';
+import { DashboardLink, VariableFormatID } from '@grafana/schema';
 import { getConfig } from 'app/core/config';
-import { getTimeSrv } from 'app/features/dashboard/services/TimeSrv';
-
-import { getVariablesUrlParams } from '../../variables/getAllVariableValuesForUrl';
 
 const timeRangeVars = [
   {
@@ -85,7 +82,7 @@ export const getPanelLinksVariableSuggestions = (): VariableSuggestion[] => [
   ...getTemplateSrv()
     .getVariables()
     .map((variable) => ({
-      value: variable.name as string,
+      value: variable.name,
       label: variable.name,
       origin: VariableOrigin.Template,
     })),
@@ -245,37 +242,33 @@ export const getCalculationValueDataLinksVariableSuggestions = (dataFrames: Data
 
 export interface LinkService {
   getDataLinkUIModel: <T>(link: DataLink, replaceVariables: InterpolateFunction | undefined, origin: T) => LinkModel<T>;
-  getAnchorInfo: (link: any) => {
+  getAnchorInfo: (link: DashboardLink) => {
     href: string;
     title: string;
     tooltip: string;
   };
-  getLinkUrl: (link: any) => string;
+  getLinkUrl: (link: DashboardLink) => string;
 }
 
 export class LinkSrv implements LinkService {
-  getLinkUrl(link: any) {
-    let url = locationUtil.assureBaseUrl(getTemplateSrv().replace(link.url || ''));
+  getLinkUrl(link: DashboardLink) {
     let params: { [key: string]: any } = {};
 
     if (link.keepTime) {
-      const range = getTimeSrv().timeRangeForUrl();
-      params['from'] = range.from;
-      params['to'] = range.to;
+      params[`\$${DataLinkBuiltInVars.keepTime}`] = true;
     }
 
     if (link.includeVars) {
-      params = {
-        ...params,
-        ...getVariablesUrlParams(),
-      };
+      params[`\$${DataLinkBuiltInVars.includeVars}`] = true;
     }
 
-    url = urlUtil.appendQueryToUrl(url, urlUtil.toUrlParams(params));
+    let url = locationUtil.assureBaseUrl(urlUtil.appendQueryToUrl(link.url || '', urlUtil.toUrlParams(params)));
+    url = getTemplateSrv().replace(url);
+
     return getConfig().disableSanitizeHtml ? url : textUtil.sanitizeUrl(url);
   }
 
-  getAnchorInfo(link: any) {
+  getAnchorInfo(link: DashboardLink) {
     const templateSrv = getTemplateSrv();
     return {
       href: this.getLinkUrl(link),
@@ -304,7 +297,7 @@ export class LinkSrv implements LinkService {
     const info: LinkModel<T> = {
       href: locationUtil.assureBaseUrl(href.replace(/\n/g, '')),
       title: link.title ?? '',
-      target: link.targetBlank ? '_blank' : undefined,
+      target: link.targetBlank !== undefined ? (link.targetBlank ? '_blank' : '_self') : undefined,
       origin,
     };
 

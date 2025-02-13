@@ -3,7 +3,7 @@ import { thunkTester } from 'test/core/thunk/thunkTester';
 import { dateTime, ExploreUrlState } from '@grafana/data';
 import { serializeStateToUrlParam } from '@grafana/data/src/utils/url';
 import { locationService } from '@grafana/runtime';
-import { PanelModel } from 'app/features/dashboard/state';
+import { PanelModel } from 'app/features/dashboard/state/PanelModel';
 
 import { reducerTester } from '../../../../test/core/redux/reducerTester';
 import { MockDataSourceApi } from '../../../../test/mocks/datasource_srv';
@@ -11,6 +11,13 @@ import { configureStore } from '../../../store/configureStore';
 import { ExploreItemState, ExploreState, StoreState, ThunkDispatch } from '../../../types';
 
 import { exploreReducer, navigateToExplore, splitClose, splitOpen } from './main';
+
+jest.mock('@grafana/runtime', () => ({
+  ...jest.requireActual('@grafana/runtime'),
+  getDataSourceSrv: () => ({
+    getInstanceSettings: jest.fn().mockReturnValue({}),
+  }),
+}));
 
 const getNavigateToExploreContext = async (openInNewWindow?: (url: string) => void) => {
   const url = '/explore';
@@ -53,6 +60,7 @@ describe('navigateToExplore', () => {
           queries: panel.targets,
           timeRange,
           dsRef: panel.datasource,
+          adhocFilters: [],
         });
       });
     });
@@ -73,6 +81,7 @@ describe('navigateToExplore', () => {
           queries: panel.targets,
           timeRange,
           dsRef: panel.datasource,
+          adhocFilters: [],
         });
       });
 

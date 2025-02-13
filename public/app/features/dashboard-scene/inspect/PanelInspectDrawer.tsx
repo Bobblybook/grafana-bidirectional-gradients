@@ -1,5 +1,4 @@
-import React from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom-v5-compat';
 
 import { locationUtil } from '@grafana/data';
 import { locationService } from '@grafana/runtime';
@@ -12,10 +11,18 @@ import {
   SceneObjectRef,
 } from '@grafana/scenes';
 import { Alert, Drawer, Tab, TabsBar } from '@grafana/ui';
+import { getDataSourceWithInspector } from 'app/features/dashboard/components/Inspector/hooks';
 import { supportsDataQuery } from 'app/features/dashboard/components/PanelEditor/utils';
+import { InspectTab } from 'app/features/inspector/types';
 
+import { DashboardScene } from '../scene/DashboardScene';
+import { getDashboardUrl } from '../utils/getDashboardUrl';
+import { getDashboardSceneFor } from '../utils/utils';
+
+import { HelpWizard } from './HelpWizard/HelpWizard';
 import { InspectDataTab } from './InspectDataTab';
 import { InspectJsonTab } from './InspectJsonTab';
+import { InspectMetaDataTab } from './InspectMetaDataTab';
 import { InspectQueryTab } from './InspectQueryTab';
 import { InspectStatsTab } from './InspectStatsTab';
 import { SceneInspectTab } from './types';
@@ -32,7 +39,10 @@ export class PanelInspectDrawer extends SceneObjectBase<PanelInspectDrawerState>
 
   constructor(state: PanelInspectDrawerState) {
     super(state);
+    this.addActivationHandler(() => this._activationHandler());
+  }
 
+  private _activationHandler() {
     this.buildTabs(0);
   }
 
@@ -40,10 +50,9 @@ export class PanelInspectDrawer extends SceneObjectBase<PanelInspectDrawerState>
    * We currently have no async await to get the panel plugin from the VizPanel.
    * That is why there is a retry argument here and a setTimeout, to try again a bit later.
    */
-  buildTabs(retry: number) {
+  async buildTabs(retry: number) {
     const panelRef = this.state.panelRef;
-    const panel = panelRef.resolve();
-    const plugin = panel.getPlugin();
+    const plugin = panelRef.resolve()?.getPlugin();
     const tabs: SceneInspectTab[] = [];
 
     if (!plugin) {
@@ -54,29 +63,41 @@ export class PanelInspectDrawer extends SceneObjectBase<PanelInspectDrawerState>
       }
     }
 
-    if (supportsDataQuery(plugin)) {
-      tabs.push(new InspectDataTab({ panelRef }));
-      tabs.push(new InspectStatsTab({ panelRef }));
-      tabs.push(new InspectQueryTab({ panelRef }));
-    }
+    if (panelRef) {
+      if (supportsDataQuery(plugin)) {
+        const data = sceneGraph.getData(panelRef.resolve());
 
-    tabs.push(new InspectJsonTab({ panelRef, onClose: this.onClose }));
+        tabs.push(new InspectDataTab({ panelRef }));
+        tabs.push(new InspectStatsTab({ panelRef }));
+        tabs.push(new InspectQueryTab({ panelRef }));
+
+        const dsWithInspector = await getDataSourceWithInspector(data.state.data);
+        if (dsWithInspector) {
+          tabs.push(new InspectMetaDataTab({ panelRef, dataSource: dsWithInspector }));
+        }
+      }
+
+      tabs.push(new InspectJsonTab({ panelRef, onClose: this.onClose }));
+    }
 
     this.setState({ tabs });
   }
 
   getDrawerTitle() {
-    const panel = this.state.panelRef.resolve();
-    return sceneGraph.interpolate(panel, `Inspect: ${panel.state.title}`);
+    const panel = this.state.panelRef?.resolve();
+    if (panel) {
+      return sceneGraph.interpolate(panel, `Inspect: ${panel.state.title}`);
+    }
+    return `Inspect panel`;
   }
 
   onClose = () => {
-    locationService.partial({ inspect: null, inspectTab: null });
+    onPanelInspectClose(getDashboardSceneFor(this));
   };
 }
 
 function PanelInspectRenderer({ model }: SceneComponentProps<PanelInspectDrawer>) {
-  const { tabs, pluginNotLoaded } = model.useState();
+  const { tabs, pluginNotLoaded, panelRef } = model.useState();
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
 
@@ -87,10 +108,15 @@ function PanelInspectRenderer({ model }: SceneComponentProps<PanelInspectDrawer>
   const urlTab = queryParams.get('inspectTab');
   const currentTab = tabs.find((tab) => tab.getTabValue() === urlTab) ?? tabs[0];
 
+  const vizPanel = panelRef!.resolve();
+
+  if (urlTab === InspectTab.Help) {
+    return <HelpWizard panel={vizPanel} onClose={model.onClose} />;
+  }
+
   return (
     <Drawer
       title={model.getDrawerTitle()}
-      scrollableContent
       onClose={model.onClose}
       size="md"
       tabs={
@@ -115,5 +141,25 @@ function PanelInspectRenderer({ model }: SceneComponentProps<PanelInspectDrawer>
       )}
       {currentTab && currentTab.Component && <currentTab.Component model={currentTab} />}
     </Drawer>
+  );
+}
+
+export function onPanelInspectClose(dashboard: DashboardScene) {
+  const meta = dashboard.state.meta;
+  // Checking for location here as well, otherwise down below isHomeDashboard will be set to true
+  // as it doesn't have uid neither slug nor url.
+  const isNew = !dashboard.state.uid && locationService.getLocation().pathname === '/dashboard/new';
+
+  locationService.push(
+    getDashboardUrl({
+      uid: dashboard.state.uid,
+      slug: dashboard.state.meta.slug,
+      currentQueryParams: locationService.getLocation().search,
+      updateQuery: {
+        inspect: null,
+        inspectTab: null,
+      },
+      isHomeDashboard: !meta.url && !meta.slug && !isNew,
+    })
   );
 }

@@ -11,46 +11,45 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
+
 	"github.com/urfave/cli/v2"
 
 	"github.com/grafana/grafana/pkg/api"
+	gcli "github.com/grafana/grafana/pkg/cmd/grafana-cli/commands"
 	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/infra/metrics"
 	"github.com/grafana/grafana/pkg/infra/process"
 	"github.com/grafana/grafana/pkg/server"
-	_ "github.com/grafana/grafana/pkg/services/alerting/conditions"
-	_ "github.com/grafana/grafana/pkg/services/alerting/notifiers"
+	"github.com/grafana/grafana/pkg/services/apiserver/standalone"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
-type ServerOptions struct {
-	Version     string
-	Commit      string
-	BuildBranch string
-	BuildStamp  string
-	Context     *cli.Context
-}
-
-func ServerCommand(version, commit, buildBranch, buildstamp string) *cli.Command {
+func ServerCommand(version, commit, enterpriseCommit, buildBranch, buildstamp string) *cli.Command {
 	return &cli.Command{
 		Name:  "server",
 		Usage: "run the grafana server",
 		Flags: commonFlags,
 		Action: func(context *cli.Context) error {
-			return RunServer(ServerOptions{
-				Version:     version,
-				Commit:      commit,
-				BuildBranch: buildBranch,
-				BuildStamp:  buildstamp,
-				Context:     context,
-			})
+			return RunServer(standalone.BuildInfo{
+				Version:          version,
+				Commit:           commit,
+				EnterpriseCommit: enterpriseCommit,
+				BuildBranch:      buildBranch,
+				BuildStamp:       buildstamp,
+			}, context)
 		},
 		Subcommands: []*cli.Command{TargetCommand(version, commit, buildBranch, buildstamp)},
 	}
 }
 
-func RunServer(opts ServerOptions) error {
+func RunServer(opts standalone.BuildInfo, cli *cli.Context) error {
 	if Version || VerboseVersion {
-		fmt.Printf("Version %s (commit: %s, branch: %s)\n", opts.Version, opts.Commit, opts.BuildBranch)
+		if opts.EnterpriseCommit != gcli.DefaultCommitValue && opts.EnterpriseCommit != "" {
+			fmt.Printf("Version %s (commit: %s, branch: %s, enterprise-commit: %s)\n", opts.Version, opts.Commit, opts.BuildBranch, opts.EnterpriseCommit)
+		} else {
+			fmt.Printf("Version %s (commit: %s, branch: %s)\n", opts.Version, opts.Commit, opts.BuildBranch)
+		}
 		if VerboseVersion {
 			fmt.Println("Dependencies:")
 			if info, ok := debug.ReadBuildInfo(); ok {
@@ -69,7 +68,7 @@ func RunServer(opts ServerOptions) error {
 		}
 	}()
 
-	if err := setupProfiling(Profile, ProfileAddr, ProfilePort); err != nil {
+	if err := setupProfiling(Profile, ProfileAddr, ProfilePort, ProfileBlockRate, ProfileMutexFraction); err != nil {
 		return err
 	}
 	if err := setupTracing(Tracing, TracingFile, logger); err != nil {
@@ -90,7 +89,7 @@ func RunServer(opts ServerOptions) error {
 		}
 	}()
 
-	setBuildInfo(opts)
+	SetBuildInfo(opts)
 	checkPrivileges()
 
 	configOptions := strings.Split(ConfigOverrides, " ")
@@ -98,11 +97,13 @@ func RunServer(opts ServerOptions) error {
 		Config:   ConfigFile,
 		HomePath: HomePath,
 		// tailing arguments have precedence over the options string
-		Args: append(configOptions, opts.Context.Args().Slice()...),
+		Args: append(configOptions, cli.Args().Slice()...),
 	})
 	if err != nil {
 		return err
 	}
+
+	metrics.SetBuildInformation(metrics.ProvideRegisterer(), opts.Version, opts.Commit, opts.BuildBranch, getBuildstamp(opts))
 
 	s, err := server.Initialize(
 		cfg,

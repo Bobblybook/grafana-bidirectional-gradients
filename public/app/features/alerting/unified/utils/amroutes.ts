@@ -1,5 +1,3 @@
-import { uniqueId } from 'lodash';
-
 import { SelectableValue } from '@grafana/data';
 import { MatcherOperator, ObjectMatcher, Route, RouteWithID } from 'app/plugins/datasource/alertmanager/types';
 
@@ -8,9 +6,9 @@ import { MatcherFieldValue } from '../types/silence-form';
 
 import { matcherToMatcherField } from './alertmanager';
 import { GRAFANA_RULES_SOURCE_NAME } from './datasource';
-import { normalizeMatchers, parseMatcher } from './matchers';
-import { findExistingRoute } from './routeTree';
-import { isValidPrometheusDuration, safeParseDurationstr } from './time';
+import { encodeMatcher, normalizeMatchers, parseMatcherToArray, unquoteWithUnescape } from './matchers';
+import { findExistingRoute, hashRoute } from './routeTree';
+import { isValidPrometheusDuration, safeParsePrometheusDuration } from './time';
 
 const matchersToArrayFieldMatchers = (
   matchers: Record<string, string> | undefined,
@@ -44,8 +42,8 @@ export const defaultGroupBy = ['grafana_folder', 'alertname'];
 
 // Common route group_by options for multiselect drop-down
 export const commonGroupByOptions = [
-  { label: 'grafana_folder', value: 'grafana_folder' },
-  { label: 'alertname', value: 'alertname' },
+  { label: 'grafana_folder', value: 'grafana_folder', isFixed: true },
+  { label: 'alertname', value: 'alertname', isFixed: true },
   { label: 'Disable (...)', value: '...' },
 ];
 
@@ -65,21 +63,25 @@ export const emptyRoute: FormAmRoute = {
 };
 
 // add unique identifiers to each route in the route tree, that way we can figure out what route we've edited / deleted
-export function addUniqueIdentifierToRoute(route: Route): RouteWithID {
+// ⚠️ make sure this function uses _stable_ identifiers!
+export function addUniqueIdentifierToRoute(route: Route, position = '0'): RouteWithID {
+  const routeHash = hashRoute(route);
+  const routes = route.routes ?? [];
+
   return {
-    id: uniqueId('route-'),
+    id: `${position}-${routeHash}`,
     ...route,
-    routes: (route.routes ?? []).map(addUniqueIdentifierToRoute),
+    routes: routes.map((route, index) => addUniqueIdentifierToRoute(route, `${position}-${index}`)),
   };
 }
 
-//returns route, and a record mapping id to existing route
-export const amRouteToFormAmRoute = (route: RouteWithID | Route | undefined): FormAmRoute => {
+// returns route, and a record mapping id to existing route
+export const amRouteToFormAmRoute = (route: RouteWithID | undefined): FormAmRoute => {
   if (!route) {
     return emptyRoute;
   }
 
-  const id = 'id' in route ? route.id : uniqueId('route-');
+  const id = route.id;
 
   if (Object.keys(route).length === 0) {
     const formAmRoute = { ...emptyRoute, id };
@@ -94,7 +96,18 @@ export const amRouteToFormAmRoute = (route: RouteWithID | Route | undefined): Fo
 
   const objectMatchers =
     route.object_matchers?.map((matcher) => ({ name: matcher[0], operator: matcher[1], value: matcher[2] })) ?? [];
-  const matchers = route.matchers?.map((matcher) => matcherToMatcherField(parseMatcher(matcher))) ?? [];
+
+  const matchers =
+    route.matchers
+      ?.flatMap((matcher) => {
+        // parse the matcher to an array of matchers, PromQL-style matchers can contain more than one matcher (in a matcher, yes it's confusing)
+        return parseMatcherToArray(matcher).flatMap(matcherToMatcherField);
+      })
+      .map(({ name, operator, value }) => ({
+        name: unquoteWithUnescape(name),
+        operator,
+        value: unquoteWithUnescape(value),
+      })) ?? [];
 
   return {
     id,
@@ -149,8 +162,10 @@ export const formAmRouteToAmRoute = (
 
   const overrideRepeatInterval = overrideTimings && repeatIntervalValue;
   const repeat_interval = overrideRepeatInterval ? repeatIntervalValue : INHERIT_FROM_PARENT;
+
+  // Empty matcher values are valid. Such matchers require specified label to not exists
   const object_matchers: ObjectMatcher[] | undefined = formAmRoute.object_matchers
-    ?.filter((route) => route.name && route.value && route.operator)
+    ?.filter((route) => route.name && route.operator && route.value !== null && route.value !== undefined)
     .map(({ name, operator, value }) => [name, operator, value]);
 
   const routes = formAmRoute.routes?.map((subRoute) =>
@@ -176,7 +191,8 @@ export const formAmRouteToAmRoute = (
   // Grafana maintains a fork of AM to support all utf-8 characters in the "object_matchers" property values but this
   // does not exist in upstream AlertManager
   if (alertManagerSourceName !== GRAFANA_RULES_SOURCE_NAME) {
-    amRoute.matchers = formAmRoute.object_matchers?.map(({ name, operator, value }) => `${name}${operator}${value}`);
+    // to support UTF-8 characters we must wrap label keys and values with double quotes if they contain reserved characters.
+    amRoute.matchers = formAmRoute.object_matchers?.map(encodeMatcher);
     amRoute.object_matchers = undefined;
   } else {
     amRoute.object_matchers = normalizeMatchers(amRoute);
@@ -198,19 +214,6 @@ export const stringToSelectableValue = (str: string): SelectableValue<string> =>
 export const stringsToSelectableValues = (arr: string[] | undefined): Array<SelectableValue<string>> =>
   (arr ?? []).map(stringToSelectableValue);
 
-export const mapSelectValueToString = (selectableValue: SelectableValue<string>): string | undefined => {
-  // this allows us to deal with cleared values
-  if (selectableValue === null) {
-    return undefined;
-  }
-
-  if (!selectableValue) {
-    return '';
-  }
-
-  return selectableValueToString(selectableValue) ?? '';
-};
-
 export const mapMultiSelectValueToStrings = (
   selectableValues: Array<SelectableValue<string>> | undefined
 ): string[] => {
@@ -221,8 +224,8 @@ export const mapMultiSelectValueToStrings = (
   return selectableValuesToStrings(selectableValues);
 };
 
-export function promDurationValidator(duration: string) {
-  if (duration.length === 0) {
+export function promDurationValidator(duration?: string) {
+  if (!duration || duration.length === 0) {
     return true;
   }
 
@@ -237,7 +240,7 @@ export const objectMatchersToString = (matchers: ObjectMatcher[]): string[] => {
   });
 };
 
-export const repeatIntervalValidator = (repeatInterval: string, groupInterval: string) => {
+export const repeatIntervalValidator = (repeatInterval: string, groupInterval = '') => {
   if (repeatInterval.length === 0) {
     return true;
   }
@@ -253,8 +256,8 @@ export const repeatIntervalValidator = (repeatInterval: string, groupInterval: s
     return validGroupInterval;
   }
 
-  const repeatDuration = safeParseDurationstr(repeatInterval);
-  const groupDuration = safeParseDurationstr(groupInterval);
+  const repeatDuration = safeParsePrometheusDuration(repeatInterval);
+  const groupDuration = safeParsePrometheusDuration(groupInterval);
 
   const isRepeatLowerThanGroupDuration = groupDuration !== 0 && repeatDuration < groupDuration;
 

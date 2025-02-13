@@ -5,19 +5,18 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"sync"
 
 	"github.com/grafana/dskit/services"
-
 	"github.com/grafana/grafana/pkg/api"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/modules"
+	"github.com/grafana/grafana/pkg/services/authz"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
-	grafanaapiserver "github.com/grafana/grafana/pkg/services/grafana-apiserver"
 	"github.com/grafana/grafana/pkg/setting"
+	"github.com/grafana/grafana/pkg/storage/unified/sql"
 )
 
 // NewModule returns an instance of a ModuleServer, responsible for managing
@@ -108,27 +107,40 @@ func (s *ModuleServer) Run() error {
 	s.notifySystemd("READY=1")
 	s.log.Debug("Waiting on services...")
 
-	// Only allow individual dskit modules to run in dev mode.
-	if s.cfg.Env != setting.Dev {
-		if len(s.cfg.Target) > 1 || s.cfg.Target[0] != "all" {
-			s.log.Error("dskit module targeting is only supported in dev mode. Falling back to 'all'")
-			s.cfg.Target = []string{"all"}
-		}
-	}
-
 	m := modules.New(s.cfg.Target)
+
+	// only run the instrumentation server module if were not running a module that already contains an http server
+	m.RegisterInvisibleModule(modules.InstrumentationServer, func() (services.Service, error) {
+		if m.IsModuleEnabled(modules.All) || m.IsModuleEnabled(modules.Core) {
+			return services.NewBasicService(nil, nil, nil).WithName(modules.InstrumentationServer), nil
+		}
+		return NewInstrumentationService(s.log, s.cfg)
+	})
 
 	m.RegisterModule(modules.Core, func() (services.Service, error) {
 		return NewService(s.cfg, s.opts, s.apiOpts)
 	})
 
-	if s.features.IsEnabled(featuremgmt.FlagGrafanaAPIServer) {
-		m.RegisterModule(modules.GrafanaAPIServer, func() (services.Service, error) {
-			return grafanaapiserver.New(path.Join(s.cfg.DataPath, "k8s"))
-		})
-	} else {
-		s.log.Debug("apiserver feature is disabled")
-	}
+	// TODO: uncomment this once the apiserver is ready to be run as a standalone target
+	//if s.features.IsEnabled(featuremgmt.FlagGrafanaAPIServer) {
+	//	m.RegisterModule(modules.GrafanaAPIServer, func() (services.Service, error) {
+	//		return grafanaapiserver.New(path.Join(s.cfg.DataPath, "k8s"))
+	//	})
+	//} else {
+	//	s.log.Debug("apiserver feature is disabled")
+	//}
+
+	m.RegisterModule(modules.StorageServer, func() (services.Service, error) {
+		docBuilders, err := InitializeDocumentBuilders(s.cfg)
+		if err != nil {
+			return nil, err
+		}
+		return sql.ProvideUnifiedStorageGrpcService(s.cfg, s.features, nil, s.log, nil, docBuilders)
+	})
+
+	m.RegisterModule(modules.ZanzanaServer, func() (services.Service, error) {
+		return authz.ProvideZanzanaService(s.cfg, s.features)
+	})
 
 	m.RegisterModule(modules.All, nil)
 

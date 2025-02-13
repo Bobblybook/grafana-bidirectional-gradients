@@ -1,10 +1,9 @@
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
+import * as React from 'react';
 
-import { createTheme } from '@grafana/data';
-
+import { CollapsedMap } from './FlameGraph/dataTransform';
 import FlameGraphHeader from './FlameGraphHeader';
 import { ColorScheme, SelectedView } from './types';
 
@@ -28,9 +27,10 @@ describe('FlameGraphHeader', () => {
         showResetButton={true}
         colorScheme={ColorScheme.ValueBased}
         onColorSchemeChange={onSchemeChange}
-        getTheme={() => createTheme({ colors: { mode: 'dark' } })}
         stickyHeader={false}
         isDiffMode={false}
+        setCollapsedMap={() => {}}
+        collapsedMap={new CollapsedMap()}
         {...props}
       />
     );

@@ -1,6 +1,6 @@
-import React from 'react';
 import { connect, ConnectedProps } from 'react-redux';
 
+import { reportInteraction } from '@grafana/runtime';
 import { RadioButtonGroup, LinkButton, FilterInput, InlineField } from '@grafana/ui';
 import config from 'app/core/config';
 import { contextSrv } from 'app/core/core';
@@ -10,6 +10,7 @@ import { selectTotal } from '../invites/state/selectors';
 
 import { changeSearchQuery } from './state/actions';
 import { getUsersSearchQuery } from './state/selectors';
+import { getExternalUserMngLinkUrl } from './utils';
 
 export interface OwnProps {
   showInvites: boolean;
@@ -22,7 +23,6 @@ function mapStateToProps(state: StoreState) {
     pendingInvitesCount: selectTotal(state.invites),
     externalUserMngLinkName: state.users.externalUserMngLinkName,
     externalUserMngLinkUrl: state.users.externalUserMngLinkUrl,
-    canInvite: state.users.canInvite,
   };
 }
 
@@ -35,7 +35,6 @@ const connector = connect(mapStateToProps, mapDispatchToProps);
 export type Props = ConnectedProps<typeof connector> & OwnProps;
 
 export const UsersActionBarUnconnected = ({
-  canInvite,
   externalUserMngLinkName,
   externalUserMngLinkUrl,
   searchQuery,
@@ -48,11 +47,18 @@ export const UsersActionBarUnconnected = ({
     { label: 'Users', value: 'users' },
     { label: `Pending Invites (${pendingInvitesCount})`, value: 'invites' },
   ];
-  const canAddToOrg: boolean = contextSrv.hasAccess(AccessControlAction.OrgUsersAdd, canInvite);
+  const canAddToOrg: boolean = contextSrv.hasPermission(AccessControlAction.OrgUsersAdd);
   // Show invite button in the following cases:
   // 1) the instance is not a hosted Grafana instance (!config.externalUserMngInfo)
   // 2) new basic auth users can be created for this instance (!config.disableLoginForm).
   const showInviteButton: boolean = canAddToOrg && !(config.disableLoginForm && config.externalUserMngInfo);
+
+  const onExternalUserMngClick = () => {
+    reportInteraction('users_admin_actions_clicked', {
+      category: 'org_users',
+      item: 'manage_users_external',
+    });
+  };
 
   return (
     <div className="page-action-bar" data-testid="users-action-bar">
@@ -70,7 +76,12 @@ export const UsersActionBarUnconnected = ({
       )}
       {showInviteButton && <LinkButton href="org/users/invite">Invite</LinkButton>}
       {externalUserMngLinkUrl && (
-        <LinkButton href={externalUserMngLinkUrl} target="_blank" rel="noopener">
+        <LinkButton
+          onClick={onExternalUserMngClick}
+          href={getExternalUserMngLinkUrl('manage-users')}
+          target="_blank"
+          rel="noopener"
+        >
           {externalUserMngLinkName}
         </LinkButton>
       )}

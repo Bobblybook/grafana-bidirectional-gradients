@@ -5,11 +5,11 @@ const DASHBOARD_NAME = 'Test variable output';
 
 describe('Variables - Constant', () => {
   beforeEach(() => {
-    e2e.flows.login(e2e.env('USERNAME'), e2e.env('PASSWORD'));
+    e2e.flows.login(Cypress.env('USERNAME'), Cypress.env('PASSWORD'));
   });
 
   it('can add a new constant variable', () => {
-    e2e.flows.openDashboard({ uid: `${PAGE_UNDER_TEST}?orgId=1&editview=templating` });
+    e2e.flows.openDashboard({ uid: `${PAGE_UNDER_TEST}?orgId=1&editview=variables` });
     cy.contains(DASHBOARD_NAME).should('be.visible');
 
     // Create a new "Constant" variable
@@ -22,11 +22,11 @@ describe('Variables - Constant', () => {
     e2e.pages.Dashboard.Settings.Variables.Edit.ConstantVariable.constantOptionsQueryInputV2().type('pesto').blur();
     e2e.pages.Dashboard.Settings.Variables.Edit.General.generalLabelInputV2().type('Variable under test').blur();
 
-    e2e.pages.Dashboard.Settings.Variables.Edit.General.previewOfValuesOption().eq(0).should('have.text', 'pesto');
+    // e2e.pages.Dashboard.Settings.Variables.Edit.General.previewOfValuesOption().eq(0).should('have.text', 'pesto');
 
     // Navigate back to the homepage and change the selected variable value
-    e2e.pages.Dashboard.Settings.Variables.Edit.General.submitButton().click();
-    e2e.pages.Dashboard.Settings.Actions.close().click();
+    e2e.pages.Dashboard.Settings.Variables.Edit.General.applyButton().click();
+    e2e.components.NavToolbar.editDashboard.backToDashboardButton().click();
     e2e.components.RefreshPicker.runButtonV2().click();
 
     // Assert it was rendered

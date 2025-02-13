@@ -1,30 +1,42 @@
-import { PanelBuilders, SceneFlexItem, SceneQueryRunner, SceneTimeRange } from '@grafana/scenes';
-import { DataSourceRef, GraphDrawStyle } from '@grafana/schema';
+import { PanelBuilders, SceneFlexItem, SceneQueryRunner } from '@grafana/scenes';
+import { BigValueGraphMode, DataSourceRef } from '@grafana/schema';
 
-const QUERY_A = `sum(grafanacloud_instance_rule_group_rules{rule_group="$rule_group"})`;
+import { INSTANCE_ID, PANEL_STYLES } from '../../../home/Insights';
+import { InsightsMenuButton } from '../../InsightsMenuButton';
 
-export function getRulesPerGroupScene(timeRange: SceneTimeRange, datasource: DataSourceRef, panelTitle: string) {
+export function getRulesPerGroupScene(datasource: DataSourceRef, panelTitle: string) {
+  const expr = INSTANCE_ID
+    ? `sum(grafanacloud_instance_rule_group_rules{rule_group="$rule_group", stack_id="${INSTANCE_ID}"})`
+    : `sum(grafanacloud_instance_rule_group_rules{rule_group="$rule_group"})`;
+
   const query = new SceneQueryRunner({
     datasource,
     queries: [
       {
         refId: 'A',
-        expr: QUERY_A,
+        expr,
         range: true,
         legendFormat: 'number of rules',
       },
     ],
-    $timeRange: timeRange,
   });
 
   return new SceneFlexItem({
-    width: 'calc(50% - 4px)',
-    height: 300,
-    body: PanelBuilders.timeseries()
+    ...PANEL_STYLES,
+    body: PanelBuilders.stat()
       .setTitle(panelTitle)
+      .setDescription('The current and historical number of alert rules in the rule group')
       .setData(query)
-      .setCustomFieldConfig('drawStyle', GraphDrawStyle.Line)
       .setUnit('none')
+      .setOption('graphMode', BigValueGraphMode.Area)
+      .setOverrides((b) =>
+        b.matchFieldsByQuery('A').overrideColor({
+          mode: 'fixed',
+          fixedColor: 'blue',
+        })
+      )
+      .setNoValue('0')
+      .setHeaderActions([new InsightsMenuButton({ panel: panelTitle })])
       .build(),
   });
 }

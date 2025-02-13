@@ -24,6 +24,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/datasources"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/pluginsintegration/pluginstore"
+	"github.com/grafana/grafana/pkg/services/pluginsintegration/sandbox"
 	"github.com/grafana/grafana/pkg/services/stats"
 	"github.com/grafana/grafana/pkg/services/stats/statstest"
 	"github.com/grafana/grafana/pkg/setting"
@@ -93,22 +94,19 @@ func (d dummyUsageStatProvider) GetUsageStats(ctx context.Context) map[string]an
 }
 
 func TestUsageStatsProviders(t *testing.T) {
-	provider1 := &dummyUsageStatProvider{stats: map[string]any{"my_stat_1": "val1", "my_stat_2": "val2"}}
-	provider2 := &dummyUsageStatProvider{stats: map[string]any{"my_stat_x": "valx", "my_stat_z": "valz"}}
+	provider := &dummyUsageStatProvider{stats: map[string]any{"my_stat_x": "valx", "my_stat_z": "valz"}}
 
 	store := dbtest.NewFakeDB()
 	statsService := statstest.NewFakeService()
 	mockSystemStats(statsService)
 	s := createService(t, setting.NewCfg(), store, statsService)
-	s.RegisterProviders([]registry.ProvidesUsageStats{provider1, provider2})
+	s.RegisterProviders([]registry.ProvidesUsageStats{provider})
 
-	m, err := s.collectAdditionalMetrics(context.Background())
+	report, err := s.usageStats.GetUsageReport(context.Background())
 	require.NoError(t, err, "Expected no error")
 
-	assert.Equal(t, "val1", m["my_stat_1"])
-	assert.Equal(t, "val2", m["my_stat_2"])
-	assert.Equal(t, "valx", m["my_stat_x"])
-	assert.Equal(t, "valz", m["my_stat_z"])
+	assert.Equal(t, "valx", report.Metrics["my_stat_x"])
+	assert.Equal(t, "valz", report.Metrics["my_stat_z"])
 }
 
 func TestFeatureUsageStats(t *testing.T) {
@@ -142,15 +140,16 @@ func TestCollectingUsageStats(t *testing.T) {
 	s := createService(t, &setting.Cfg{
 		ReportingEnabled:     true,
 		BuildVersion:         "5.0.0",
-		AnonymousEnabled:     true,
+		Anonymous:            setting.AnonymousSettings{Enabled: true},
 		BasicAuthEnabled:     true,
 		LDAPAuthEnabled:      true,
-		AuthProxyEnabled:     true,
+		AuthProxy:            setting.AuthProxySettings{Enabled: true},
 		Packaging:            "deb",
 		ReportingDistributor: "hosted-grafana",
-		RemoteCacheOptions: &setting.RemoteCacheOptions{
+		RemoteCacheOptions: &setting.RemoteCacheSettings{
 			Name: "database",
 		},
+		EnableFrontendSandboxForPlugins: []string{"grafana-worldmap-panel"},
 	}, sqlStore, statsService,
 		withDatasources(mockDatasourceService{datasources: expectedDataSources}))
 
@@ -181,6 +180,8 @@ func TestCollectingUsageStats(t *testing.T) {
 	assert.EqualValues(t, 3, metrics["stats.correlations.count"])
 
 	assert.InDelta(t, int64(65), metrics["stats.uptime"], 6)
+
+	assert.EqualValues(t, 1, metrics["stats.plugins.sandboxed_plugins.count"])
 }
 
 func TestDatasourceStats(t *testing.T) {
@@ -382,9 +383,10 @@ func createService(t testing.TB, cfg *setting.Cfg, store db.DB, statsService sta
 		store,
 		&mockSocial{},
 		&pluginstore.FakePluginStore{},
-		featuremgmt.WithFeatures("feature1", "feature2"),
+		featuremgmt.WithManager("feature1", "feature2"),
 		o.datasources,
-		httpclient.NewProvider(),
+		httpclient.NewProvider(sdkhttpclient.ProviderOptions{Middlewares: []sdkhttpclient.Middleware{}}),
+		sandbox.ProvideService(cfg),
 	)
 }
 

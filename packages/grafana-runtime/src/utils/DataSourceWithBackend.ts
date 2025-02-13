@@ -16,8 +16,10 @@ import {
   makeClassES5Compatible,
   parseLiveChannelAddress,
   ScopedVars,
+  AdHocVariableFilter,
 } from '@grafana/data';
 
+import { reportInteraction } from '../analytics/utils';
 import { config } from '../config';
 import {
   BackendSrvRequest,
@@ -42,7 +44,7 @@ export const ExpressionDatasourceRef = Object.freeze({
 });
 
 /**
- * @internal
+ * @public
  */
 export function isExpressionReference(ref?: DataSourceRef | string | null): boolean {
   if (!ref) {
@@ -79,8 +81,10 @@ enum PluginRequestHeaders {
   DatasourceUID = 'X-Datasource-Uid', // can be used for routing/ load balancing
   DashboardUID = 'X-Dashboard-Uid', // mainly useful for debugging slow queries
   PanelID = 'X-Panel-Id', // mainly useful for debugging slow queries
+  PanelPluginId = 'X-Panel-Plugin-Id',
   QueryGroupID = 'X-Query-Group-Id', // mainly useful to find related queries with query splitting
   FromExpression = 'X-Grafana-From-Expr', // used by datasources to identify expression queries
+  SkipQueryCache = 'X-Cache-Skip', // used by datasources to skip the query cache
 }
 
 /**
@@ -131,14 +135,10 @@ class DataSourceWithBackend<
     const { intervalMs, maxDataPoints, queryCachingTTL, range, requestId, hideFromInspector = false } = request;
     let targets = request.targets;
 
-    if (this.filterQuery) {
-      targets = targets.filter((q) => this.filterQuery!(q));
-    }
-
     let hasExpr = false;
     const pluginIDs = new Set<string>();
     const dsUIDs = new Set<string>();
-    const queries = targets.map((q) => {
+    const queries: DataQuery[] = targets.map((q) => {
       let datasource = this.getRef();
       let datasourceId = this.id;
       let shouldApplyTemplateVariables = true;
@@ -175,7 +175,7 @@ class DataSourceWithBackend<
         dsUIDs.add(datasource.uid);
       }
       return {
-        ...(shouldApplyTemplateVariables ? this.applyTemplateVariables(q, request.scopedVars) : q),
+        ...(shouldApplyTemplateVariables ? this.applyTemplateVariables(q, request.scopedVars, request.filters) : q),
         datasource,
         datasourceId, // deprecated!
         intervalMs,
@@ -189,12 +189,11 @@ class DataSourceWithBackend<
       return of({ data: [] });
     }
 
-    const body: any = { queries };
-
-    if (range) {
-      body.from = range.from.valueOf().toString();
-      body.to = range.to.valueOf().toString();
-    }
+    const body = {
+      queries,
+      from: range?.from.valueOf().toString(),
+      to: range?.to.valueOf().toString(),
+    };
 
     if (config.featureToggles.queryOverLive) {
       return getGrafanaLiveSrv().getQueryData({
@@ -203,11 +202,23 @@ class DataSourceWithBackend<
       });
     }
 
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = request.headers ?? {};
     headers[PluginRequestHeaders.PluginID] = Array.from(pluginIDs).join(', ');
     headers[PluginRequestHeaders.DatasourceUID] = Array.from(dsUIDs).join(', ');
 
     let url = '/api/ds/query?ds_type=' + this.type;
+
+    // Use the new query service
+    if (config.featureToggles.queryServiceFromUI) {
+      if (!(config.featureToggles.queryService || config.featureToggles.grafanaAPIServerWithExperimentalAPIs)) {
+        console.warn('feature toggle queryServiceFromUI also requires the queryService to be running');
+      } else {
+        if (!hasExpr && dsUIDs.size === 1) {
+          // TODO? can we talk directly to the apiserver?
+        }
+        url = `/apis/query.grafana.app/v0alpha1/namespaces/${config.namespace}/query?ds_type=' + this.type`;
+      }
+    }
 
     if (hasExpr) {
       headers[PluginRequestHeaders.FromExpression] = 'true';
@@ -221,12 +232,18 @@ class DataSourceWithBackend<
 
     if (request.dashboardUID) {
       headers[PluginRequestHeaders.DashboardUID] = request.dashboardUID;
+      if (request.panelId) {
+        headers[PluginRequestHeaders.PanelID] = `${request.panelId}`;
+      }
     }
-    if (request.panelId) {
-      headers[PluginRequestHeaders.PanelID] = `${request.panelId}`;
+    if (request.panelPluginId) {
+      headers[PluginRequestHeaders.PanelPluginId] = `${request.panelPluginId}`;
     }
     if (request.queryGroupId) {
       headers[PluginRequestHeaders.QueryGroupID] = `${request.queryGroupId}`;
+    }
+    if (request.skipQueryCache) {
+      headers[PluginRequestHeaders.SkipQueryCache] = 'true';
     }
     return getBackendSrv()
       .fetch<BackendDataSourceResponse>({
@@ -239,7 +256,7 @@ class DataSourceWithBackend<
       })
       .pipe(
         switchMap((raw) => {
-          const rsp = toDataQueryResponse(raw, queries as DataQuery[]);
+          const rsp = toDataQueryResponse(raw, queries);
           // Check if any response should subscribe to a live stream
           if (rsp.data?.length && rsp.data.find((f: DataFrame) => f.meta?.channel)) {
             return toStreamingDataResponse(rsp, request, this.streamOptionsProvider);
@@ -263,22 +280,12 @@ class DataSourceWithBackend<
   /**
    * Apply template variables for explore
    */
-  interpolateVariablesInQueries(queries: TQuery[], scopedVars: ScopedVars | {}): TQuery[] {
-    return queries.map((q) => this.applyTemplateVariables(q, scopedVars) as TQuery);
+  interpolateVariablesInQueries(queries: TQuery[], scopedVars: ScopedVars, filters?: AdHocVariableFilter[]): TQuery[] {
+    return queries.map((q) => this.applyTemplateVariables(q, scopedVars, filters));
   }
 
   /**
-   * Override to skip executing a query.  Note this function may not be called
-   * if the query method is overwritten.
-   *
-   * @returns false if the query should be skipped
-   *
-   * @virtual
-   */
-  filterQuery?(query: TQuery): boolean;
-
-  /**
-   * Override to apply template variables.  The result is usually also `TQuery`, but sometimes this can
+   * Override to apply template variables and adhoc filters.  The result is usually also `TQuery`, but sometimes this can
    * be used to modify the query structure before sending to the backend.
    *
    * NOTE: if you do modify the structure or use template variables, alerting queries may not work
@@ -286,7 +293,7 @@ class DataSourceWithBackend<
    *
    * @virtual
    */
-  applyTemplateVariables(query: TQuery, scopedVars: ScopedVars): Record<string, any> {
+  applyTemplateVariables(query: TQuery, scopedVars: ScopedVars, filters?: AdHocVariableFilter[]) {
     return query;
   }
 
@@ -319,7 +326,7 @@ class DataSourceWithBackend<
   /**
    * Send a POST request to the datasource resource path
    */
-  async postResource<T = any>(
+  async postResource<T = unknown>(
     path: string,
     data?: BackendSrvRequest['data'],
     options?: Partial<BackendSrvRequest>
@@ -349,8 +356,17 @@ class DataSourceWithBackend<
         headers: this.getRequestHeaders(),
       })
     )
-      .then((v: FetchResponse) => v.data)
-      .catch((err) => err.data);
+      .then((v: FetchResponse<HealthCheckResult>) => v.data)
+      .catch((err) => {
+        let properties: Record<string, string> = {
+          plugin_id: this.meta?.id || '',
+          plugin_version: this.meta?.info?.version || '',
+          datasource_healthcheck_status: err?.data?.status || 'error',
+          datasource_healthcheck_message: err?.data?.message || '',
+        };
+        reportInteraction('datasource_health_check_completed', properties);
+        return err.data;
+      });
   }
 
   /**

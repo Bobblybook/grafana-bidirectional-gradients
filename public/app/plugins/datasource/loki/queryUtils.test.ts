@@ -1,6 +1,5 @@
 import { String } from '@grafana/lezer-logql';
 
-import { createLokiDatasource } from './mocks';
 import {
   getHighlighterExpressionsFromQuery,
   getLokiQueryType,
@@ -17,9 +16,11 @@ import {
   getLogQueryFromMetricsQuery,
   getNormalizedLokiQuery,
   getNodePositionsFromQuery,
-  formatLogqlQuery,
+  getLogQueryFromMetricsQueryAtPosition,
+  interpolateShardingSelector,
+  requestSupportsSharding,
 } from './queryUtils';
-import { LokiQuery, LokiQueryType } from './types';
+import { LokiQuery, LokiQueryDirection, LokiQueryType } from './types';
 
 describe('getHighlighterExpressionsFromQuery', () => {
   it('returns no expressions for empty query', () => {
@@ -120,13 +121,21 @@ describe('getHighlighterExpressionsFromQuery', () => {
   `('should correctly identify the type of quote used in the term', ({ input, expected }) => {
     expect(getHighlighterExpressionsFromQuery(`{foo="bar"} |= ${input}`)).toEqual([expected]);
   });
+
+  it.each(['|=', '|~'])('returns multiple expressions when using or statements', (op: string) => {
+    expect(getHighlighterExpressionsFromQuery(`{app="frontend"} ${op} "line" or "text"`)).toEqual(['line', 'text']);
+  });
+
+  it.each(['|=', '|~'])('returns multiple expressions when using or statements and ip filters', (op: string) => {
+    expect(getHighlighterExpressionsFromQuery(`{app="frontend"} ${op} "line" or ip("10.0.0.1")`)).toEqual(['line']);
+  });
 });
 
 describe('getNormalizedLokiQuery', () => {
   it('removes deprecated instant property', () => {
     const input: LokiQuery = { refId: 'A', expr: 'test1', instant: true };
     const output = getNormalizedLokiQuery(input);
-    expect(output).toStrictEqual({ refId: 'A', expr: 'test1', queryType: LokiQueryType.Instant });
+    expect(output).toStrictEqual({ refId: 'A', expr: 'test1', queryType: LokiQueryType.Range });
   });
 
   it('removes deprecated range property', () => {
@@ -342,6 +351,26 @@ describe('getParserFromQuery', () => {
       parser
     );
   });
+
+  it('supports json parser with arguments', () => {
+    // Redundant, but gives us a baseline
+    expect(getParserFromQuery('{job="grafana"} | json')).toBe('json');
+    expect(getParserFromQuery('{job="grafana"} | json field="otherField"')).toBe('json');
+    expect(getParserFromQuery('{job="grafana"} | json field="otherField", label="field2"')).toBe('json');
+  });
+
+  it('supports logfmt parser with arguments and flags', () => {
+    // Redundant, but gives us a baseline
+    expect(getParserFromQuery('{job="grafana"} | logfmt')).toBe('logfmt');
+    expect(getParserFromQuery('{job="grafana"} | logfmt --strict')).toBe('logfmt');
+    expect(getParserFromQuery('{job="grafana"} | logfmt --strict --keep-empty')).toBe('logfmt');
+    expect(getParserFromQuery('{job="grafana"} | logfmt field="otherField"')).toBe('logfmt');
+    expect(getParserFromQuery('{job="grafana"} | logfmt field="otherField", label')).toBe('logfmt');
+    expect(getParserFromQuery('{job="grafana"} | logfmt --strict field="otherField"')).toBe('logfmt');
+    expect(
+      getParserFromQuery('{job="grafana"} | logfmt --strict --keep-empty field="otherField", label="field2"')
+    ).toBe('logfmt');
+  });
 });
 
 describe('requestSupportsSplitting', () => {
@@ -407,6 +436,39 @@ describe('getLogQueryFromMetricsQuery', () => {
       )
     ).toBe('{label="$var"} | logfmt | __error__=``');
   });
+  it('does not return a query when there is no log query', () => {
+    expect(getLogQueryFromMetricsQuery('1+1')).toBe('');
+    expect(getLogQueryFromMetricsQuery('count_over_time([1s])')).toBe('');
+  });
+});
+
+describe('getLogQueryFromMetricsQueryAtPosition', () => {
+  it('works like getLogQueryFromMetricsQuery for simple queries', () => {
+    expect(
+      getLogQueryFromMetricsQueryAtPosition('count_over_time({job="grafana"} | logfmt | label="value" [1m])', 57)
+    ).toBe('{job="grafana"} | logfmt | label="value"');
+    expect(getLogQueryFromMetricsQueryAtPosition('count_over_time({job="grafana"} [1m])', 37)).toBe('{job="grafana"}');
+    expect(
+      getLogQueryFromMetricsQueryAtPosition(
+        'sum(quantile_over_time(0.5, {label="$var"} | logfmt | __error__=`` | unwrap latency | __error__=`` [$__interval]))',
+        45
+      )
+    ).toBe('{label="$var"} | logfmt | __error__=``');
+  });
+  it.each([
+    [
+      'count_over_time({place="moon"} | json test="test" [1m]) + avg_over_time({place="luna"} | logfmt test="test" [1m])',
+      '{place="moon"} | json test="test"',
+      49,
+    ],
+    [
+      'count_over_time({place="moon"} | json test="test" [1m]) + avg_over_time({place="luna"} | logfmt test="test" [1m])',
+      '{place="luna"} | logfmt test="test"',
+      107,
+    ],
+  ])('gets the right query for complex queries', (metric: string, log: string, position: number) => {
+    expect(getLogQueryFromMetricsQueryAtPosition(metric, position)).toBe(log);
+  });
 });
 
 describe('getNodePositionsFromQuery', () => {
@@ -430,26 +492,138 @@ describe('getNodePositionsFromQuery', () => {
   });
 });
 
-describe('formatLogqlQuery', () => {
-  const ds = createLokiDatasource();
-
-  it('formats a logs query', () => {
-    expect(formatLogqlQuery('{job="grafana"}', ds)).toBe('{job="grafana"}');
+describe('interpolateShardingSelector', () => {
+  let queries: LokiQuery[] = [];
+  beforeEach(() => {
+    queries = [
+      {
+        refId: 'A',
+        expr: '{job="grafana"}',
+      },
+    ];
   });
 
-  it('formats a metrics query', () => {
-    expect(formatLogqlQuery('count_over_time({job="grafana"}[1m])', ds)).toBe(
-      'count_over_time(\n  {job="grafana"}\n  [1m]\n)'
+  it('returns the original query when there are no shards to interpolate', () => {
+    expect(interpolateShardingSelector(queries, [])).toEqual(queries);
+  });
+
+  it('adds the empty shard to the query when -1 is passed', () => {
+    expect(interpolateShardingSelector(queries, [-1])).toEqual([
+      {
+        refId: 'A',
+        expr: '{job="grafana", __stream_shard__=""}',
+      },
+    ]);
+  });
+
+  it('uses an equality filter when a single shard is passed', () => {
+    expect(interpolateShardingSelector(queries, [13])).toEqual([
+      {
+        refId: 'A',
+        expr: '{job="grafana", __stream_shard__="13"}',
+      },
+    ]);
+  });
+
+  it('supports multiple shard values', () => {
+    expect(interpolateShardingSelector(queries, [1, 13, 667])).toEqual([
+      {
+        refId: 'A',
+        expr: '{job="grafana", __stream_shard__=~"1|13|667"}',
+      },
+    ]);
+  });
+
+  describe('For metric queries', () => {
+    let queries: LokiQuery[] = [];
+    beforeEach(() => {
+      queries = [
+        {
+          refId: 'A',
+          expr: 'count_over_time({job="grafana"} [5m])',
+        },
+      ];
+    });
+    it('returns the original query when there are no shards to interpolate', () => {
+      expect(interpolateShardingSelector(queries, [])).toEqual(queries);
+    });
+
+    it('adds the empty shard to the query when -1 is passed', () => {
+      expect(interpolateShardingSelector(queries, [-1])).toEqual([
+        {
+          refId: 'A',
+          expr: 'count_over_time({job="grafana", __stream_shard__=""} | drop __stream_shard__ [5m])',
+        },
+      ]);
+    });
+
+    it('uses an equality filter when a single shard is passed', () => {
+      expect(interpolateShardingSelector(queries, [13])).toEqual([
+        {
+          refId: 'A',
+          expr: 'count_over_time({job="grafana", __stream_shard__="13"} | drop __stream_shard__ [5m])',
+        },
+      ]);
+    });
+
+    it('supports multiple shard values', () => {
+      expect(interpolateShardingSelector(queries, [1, 13, 667])).toEqual([
+        {
+          refId: 'A',
+          expr: 'count_over_time({job="grafana", __stream_shard__=~"1|13|667"} | drop __stream_shard__ [5m])',
+        },
+      ]);
+    });
+
+    it('supports multiple metric queries values', () => {
+      const queries = [
+        {
+          refId: 'A',
+          expr: 'count_over_time({job="grafana"} [5m]) + count_over_time({job="grafana"} [5m])',
+        },
+      ];
+      expect(interpolateShardingSelector(queries, [1, 13, 667])).toEqual([
+        {
+          refId: 'A',
+          expr: 'count_over_time({job="grafana", __stream_shard__=~"1|13|667"} | drop __stream_shard__ [5m]) + count_over_time({job="grafana", __stream_shard__=~"1|13|667"} | drop __stream_shard__ [5m])',
+        },
+      ]);
+    });
+  });
+});
+
+describe('requestSupportsSharding', () => {
+  it('supports log queries with Scan direction', () => {
+    expect(requestSupportsSharding([{ refId: 'A', expr: '{place="luna"}', direction: LokiQueryDirection.Scan }])).toBe(
+      true
     );
   });
 
-  it('formats a metrics query with variables', () => {
-    // mock the interpolateString return value so it passes the isValid check
-    ds.interpolateString = jest.fn(() => 'rate({job="grafana"}[1s])');
+  it('declines log queries without Scan direction', () => {
+    expect(
+      requestSupportsSharding([{ refId: 'A', expr: '{place="luna"}', direction: LokiQueryDirection.Backward }])
+    ).toBe(false);
+  });
 
-    expect(formatLogqlQuery('rate({job="grafana"}[$__range])', ds)).toBe('rate(\n  {job="grafana"}\n  [$__range]\n)');
-    expect(formatLogqlQuery('rate({job="grafana"}[$__interval])', ds)).toBe(
-      'rate(\n  {job="grafana"}\n  [$__interval]\n)'
-    );
+  it.each([
+    'count_over_time({place="luna"}[1m])',
+    'sum_over_time({place="luna"}[1m])',
+    'sum by (level) (count_over_time({place="luna"}[1m]))',
+    'sum by (level) (rate({place="luna"}[1m]))',
+    'sum(sum by (level) (avg_over_time({place="luna"}[1m])))',
+    'sum(rate({place="luna"}[1m]))',
+  ])('allows supported metric queries', (expr: string) => {
+    expect(requestSupportsSharding([{ refId: 'A', expr }])).toBe(true);
+  });
+
+  it.each([
+    'avg_over_time({place="luna"}[1m])',
+    'avg(sum_over_time({place="luna"}[1m]))',
+    'avg(rate({place="luna"}[1m]))',
+    'count_over_time({place="luna"}[1m]) / count_over_time({place="luna"}[1m])',
+    'avg(sum by (level) (avg_over_time({place="luna"}[1m])))',
+    'sum(rate({place="luna"}[1m])) / sum(rate({place="luna"}[1m]))',
+  ])('declines supported metric queries', (expr: string) => {
+    expect(requestSupportsSharding([{ refId: 'A', expr }])).toBe(false);
   });
 });

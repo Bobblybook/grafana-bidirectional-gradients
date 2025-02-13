@@ -1,4 +1,4 @@
-import React from 'react';
+import { ChangeEvent } from 'react';
 
 import {
   DataTransformerID,
@@ -9,8 +9,10 @@ import {
   StandardEditorsRegistryItem,
   TransformerCategory,
 } from '@grafana/data';
-import { InlineField, InlineFieldRow, Select, InlineSwitch } from '@grafana/ui';
+import { InlineField, InlineFieldRow, Select, InlineSwitch, Input, Combobox, ComboboxOption } from '@grafana/ui';
 import { FieldNamePicker } from '@grafana/ui/src/components/MatchersUI/FieldNamePicker';
+
+import { getTransformationContent } from '../docs/getTransformationContent';
 
 import { JSONPathEditor } from './components/JSONPathEditor';
 import { extractFieldsTransformer } from './extractFields';
@@ -29,7 +31,7 @@ const fieldNamePickerSettings: StandardEditorsRegistryItem<string, FieldNamePick
 
 export const extractFieldsTransformerEditor = ({
   input,
-  options,
+  options = { delimiter: ',' },
   onChange,
 }: TransformerUIProps<ExtractFieldsOptions>) => {
   const onPickSourceField = (source?: string) => {
@@ -50,6 +52,20 @@ export const extractFieldsTransformerEditor = ({
     onChange({
       ...options,
       jsonPaths,
+    });
+  };
+
+  const onRegexpChange = (e: ChangeEvent<HTMLInputElement>) => {
+    onChange({
+      ...options,
+      regExp: e.target.value,
+    });
+  };
+
+  const onDelimiterChange = (val: ComboboxOption) => {
+    onChange({
+      ...options,
+      delimiter: val.value,
     });
   };
 
@@ -81,7 +97,7 @@ export const extractFieldsTransformerEditor = ({
             context={{ data: input }}
             value={options.source ?? ''}
             onChange={onPickSourceField}
-            item={fieldNamePickerSettings as any}
+            item={fieldNamePickerSettings}
           />
         </InlineField>
       </InlineFieldRow>
@@ -96,7 +112,29 @@ export const extractFieldsTransformerEditor = ({
           />
         </InlineField>
       </InlineFieldRow>
-      {options.format === 'json' && <JSONPathEditor options={options.jsonPaths ?? []} onChange={onJSONPathsChange} />}
+      {options.format === FieldExtractorID.RegExp && (
+        <InlineFieldRow>
+          <InlineField label="RegExp" labelWidth={16} interactive={true} tooltip="Example: /(?<NewField>.*)/">
+            <Input placeholder="/(?<NewField>.*)/" value={options.regExp} onChange={onRegexpChange} />
+          </InlineField>
+        </InlineFieldRow>
+      )}
+      {options.format === FieldExtractorID.JSON && (
+        <JSONPathEditor options={options.jsonPaths ?? []} onChange={onJSONPathsChange} />
+      )}
+      {options.format === FieldExtractorID.Delimiter && (
+        <InlineFieldRow>
+          <InlineField label="Delimiter" labelWidth={16}>
+            <Combobox
+              value={options.delimiter}
+              options={[{ value: ',' }, { value: ';' }, { value: '|' }]}
+              onChange={onDelimiterChange}
+              placeholder="Select delimiter..."
+              width={24}
+            />
+          </InlineField>
+        </InlineFieldRow>
+      )}
       <InlineFieldRow>
         <InlineField label={'Replace all fields'} labelWidth={16}>
           <InlineSwitch value={options.replace ?? false} onChange={onToggleReplace} />
@@ -117,7 +155,8 @@ export const extractFieldsTransformRegistryItem: TransformerRegistryItem<Extract
   id: DataTransformerID.extractFields,
   editor: extractFieldsTransformerEditor,
   transformation: extractFieldsTransformer,
-  name: 'Extract fields',
+  name: extractFieldsTransformer.name,
   description: `Parse fields from content (JSON, labels, etc).`,
   categories: new Set([TransformerCategory.Reformat]),
+  help: getTransformationContent(DataTransformerID.extractFields).helperDocs,
 };

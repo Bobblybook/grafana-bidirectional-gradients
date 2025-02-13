@@ -11,21 +11,28 @@ type AttachedFile struct {
 	Content []byte
 }
 
+// EmbeddedContent struct represents an embedded file.
+type EmbeddedContent struct {
+	Name    string
+	Content []byte
+}
+
 // Message is representation of the email message.
 type Message struct {
-	To            []string
-	SingleEmail   bool
-	From          string
-	Subject       string
-	Body          map[string]string
-	Info          string
-	ReplyTo       []string
-	EmbeddedFiles []string
-	AttachedFiles []*AttachedFile
+	To               []string
+	SingleEmail      bool
+	From             string
+	Subject          string
+	Body             map[string]string
+	Info             string
+	ReplyTo          []string
+	EmbeddedFiles    []string
+	EmbeddedContents []EmbeddedContent
+	AttachedFiles    []*AttachedFile
 }
 
 func setDefaultTemplateData(cfg *setting.Cfg, data map[string]any, u *user.User) {
-	data["AppUrl"] = setting.AppUrl
+	data["AppUrl"] = cfg.AppURL
 	data["BuildVersion"] = setting.BuildVersion
 	data["BuildStamp"] = setting.BuildStamp
 	data["EmailCodeValidHours"] = cfg.EmailCodeValidMinutes / 60

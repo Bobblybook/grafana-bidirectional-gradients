@@ -1,5 +1,5 @@
 import { css } from '@emotion/css';
-import React, { PureComponent } from 'react';
+import { PureComponent } from 'react';
 import { connect, ConnectedProps } from 'react-redux';
 
 import { AppEvents, GrafanaTheme2, LoadingState, NavModelItem } from '@grafana/data';
@@ -8,14 +8,11 @@ import { config, reportInteraction } from '@grafana/runtime';
 import {
   Button,
   Field,
-  Form,
-  HorizontalGroup,
   Input,
   Spinner,
   stylesFactory,
   TextArea,
   Themeable2,
-  VerticalGroup,
   FileDropzone,
   withTheme2,
   DropzoneFile,
@@ -23,9 +20,12 @@ import {
   LinkButton,
   TextLink,
   Label,
+  Stack,
 } from '@grafana/ui';
 import appEvents from 'app/core/app_events';
+import { Form } from 'app/core/components/Form/Form';
 import { Page } from 'app/core/components/Page/Page';
+import { t, Trans } from 'app/core/internationalization';
 import { GrafanaRouteComponentProps } from 'app/core/navigation/types';
 import { StoreState } from 'app/types';
 
@@ -126,6 +126,12 @@ class UnthemedDashboardImport extends PureComponent<Props> {
   renderImportForm() {
     const styles = importStyles(this.props.theme);
 
+    const GcomDashboardsLink = () => (
+      <TextLink variant="bodySmall" href="https://grafana.com/grafana/dashboards/" external>
+        grafana.com/dashboards
+      </TextLink>
+    );
+
     return (
       <>
         <div className={styles.option}>
@@ -136,8 +142,11 @@ class UnthemedDashboardImport extends PureComponent<Props> {
             onLoad={this.onFileUpload}
           >
             <FileDropzoneDefaultChildren
-              primaryText="Upload dashboard JSON file"
-              secondaryText="Drag and drop here or click to browse"
+              primaryText={t('dashboard-import.file-dropzone.primary-text', 'Upload dashboard JSON file')}
+              secondaryText={t(
+                'dashboard-import.file-dropzone.secondary-text',
+                'Drag and drop here or click to browse'
+              )}
             />
           </FileDropzone>
         </div>
@@ -148,10 +157,9 @@ class UnthemedDashboardImport extends PureComponent<Props> {
                 label={
                   <Label className={styles.labelWithLink} htmlFor="url-input">
                     <span>
-                      Find and import dashboards for common applications at{' '}
-                      <TextLink variant="bodySmall" href="https://grafana.com/grafana/dashboards/" external>
-                        grafana.com/dashboards
-                      </TextLink>
+                      <Trans i18nKey="dashboard-import.gcom-field.label">
+                        Find and import dashboards for common applications at <GcomDashboardsLink />
+                      </Trans>
                     </span>
                   </Label>
                 }
@@ -160,13 +168,20 @@ class UnthemedDashboardImport extends PureComponent<Props> {
               >
                 <Input
                   id="url-input"
-                  placeholder="Grafana.com dashboard URL or ID"
+                  placeholder={t('dashboard-import.gcom-field.placeholder', 'Grafana.com dashboard URL or ID')}
                   type="text"
                   {...register('gcomDashboard', {
-                    required: 'A Grafana dashboard URL or ID is required',
+                    required: t(
+                      'dashboard-import.gcom-field.validation-required',
+                      'A Grafana dashboard URL or ID is required'
+                    ),
                     validate: validateGcomDashboard,
                   })}
-                  addonAfter={<Button type="submit">Load</Button>}
+                  addonAfter={
+                    <Button type="submit">
+                      <Trans i18nKey="dashboard-import.gcom-field.load-button">Load</Trans>
+                    </Button>
+                  }
                 />
               </Field>
             )}
@@ -177,13 +192,13 @@ class UnthemedDashboardImport extends PureComponent<Props> {
             {({ register, errors }) => (
               <>
                 <Field
-                  label="Import via dashboard JSON model"
+                  label={t('dashboard-import.json-field.label', 'Import via dashboard JSON model')}
                   invalid={!!errors.dashboardJson}
                   error={errors.dashboardJson && errors.dashboardJson.message}
                 >
                   <TextArea
                     {...register('dashboardJson', {
-                      required: 'Need a dashboard JSON model',
+                      required: t('dashboard-import.json-field.validation-required', 'Need a dashboard JSON model'),
                       validate: validateDashboardJson,
                     })}
                     data-testid={selectors.components.DashboardImportPage.textarea}
@@ -192,14 +207,14 @@ class UnthemedDashboardImport extends PureComponent<Props> {
                     placeholder={JSON_PLACEHOLDER}
                   />
                 </Field>
-                <HorizontalGroup>
+                <Stack>
                   <Button type="submit" data-testid={selectors.components.DashboardImportPage.submit}>
-                    Load
+                    <Trans i18nKey="dashboard-import.form-actions.load">Load</Trans>
                   </Button>
                   <LinkButton variant="secondary" href={`${config.appSubUrl}/dashboards`}>
-                    Cancel
+                    <Trans i18nKey="dashboard-import.form-actions.cancel">Cancel</Trans>
                   </LinkButton>
-                </HorizontalGroup>
+                </Stack>
               </>
             )}
           </Form>
@@ -220,11 +235,11 @@ class UnthemedDashboardImport extends PureComponent<Props> {
       <Page navId="dashboards/browse" pageNav={this.pageNav}>
         <Page.Contents>
           {loadingState === LoadingState.Loading && (
-            <VerticalGroup justify="center">
-              <HorizontalGroup justify="center">
-                <Spinner size={32} />
-              </HorizontalGroup>
-            </VerticalGroup>
+            <Stack direction={'column'} justifyContent="center">
+              <Stack justifyContent="center">
+                <Spinner size="xxl" />
+              </Stack>
+            </Stack>
           )}
           {[LoadingState.Error, LoadingState.NotStarted].includes(loadingState) && this.renderImportForm()}
           {loadingState === LoadingState.Done && <ImportDashboardOverview />}
@@ -241,15 +256,15 @@ export default DashboardImport;
 
 const importStyles = stylesFactory((theme: GrafanaTheme2) => {
   return {
-    option: css`
-      margin-bottom: ${theme.spacing(4)};
-      max-width: 600px;
-    `,
-    labelWithLink: css`
-      max-width: 100%;
-    `,
-    linkWithinLabel: css`
-      font-size: inherit;
-    `,
+    option: css({
+      marginBottom: theme.spacing(4),
+      maxWidth: '600px',
+    }),
+    labelWithLink: css({
+      maxWidth: '100%',
+    }),
+    linkWithinLabel: css({
+      fontSize: 'inherit',
+    }),
   };
 });

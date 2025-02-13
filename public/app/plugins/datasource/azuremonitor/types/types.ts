@@ -1,17 +1,18 @@
-import {
-  DataSourceInstanceSettings,
-  DataSourceJsonData,
-  DataSourceSettings,
-  PanelData,
-  SelectableValue,
-} from '@grafana/data';
+import { ScalarParameter, TabularParameter, Function, EntityGroup } from '@kusto/monaco-kusto';
+
+import { AzureDataSourceSecureJsonData, AzureDataSourceJsonData } from '@grafana/azure-sdk';
+import { DataSourceInstanceSettings, DataSourceSettings, PanelData, SelectableValue, TimeRange } from '@grafana/data';
 
 import Datasource from '../datasource';
 
+import { AzureLogAnalyticsMetadataTable } from './logAnalyticsMetadata';
 import { AzureMonitorQuery, ResultFormat } from './query';
 
-export type AzureDataSourceSettings = DataSourceSettings<AzureDataSourceJsonData, AzureDataSourceSecureJsonData>;
-export type AzureDataSourceInstanceSettings = DataSourceInstanceSettings<AzureDataSourceJsonData>;
+export type AzureMonitorDataSourceSettings = DataSourceSettings<
+  AzureMonitorDataSourceJsonData,
+  AzureMonitorDataSourceSecureJsonData
+>;
+export type AzureMonitorDataSourceInstanceSettings = DataSourceInstanceSettings<AzureMonitorDataSourceJsonData>;
 
 export interface DatasourceValidationResult {
   status: 'success' | 'error';
@@ -19,46 +20,10 @@ export interface DatasourceValidationResult {
   title?: string;
 }
 
-/**
- * Azure clouds known to Azure Monitor.
- */
-export enum AzureCloud {
-  Public = 'AzureCloud',
-  China = 'AzureChinaCloud',
-  USGovernment = 'AzureUSGovernment',
-  None = '',
-}
-
-export type AzureAuthType = 'msi' | 'clientsecret';
-
-export type ConcealedSecret = symbol;
-
-interface AzureCredentialsBase {
-  authType: AzureAuthType;
-}
-
-export interface AzureManagedIdentityCredentials extends AzureCredentialsBase {
-  authType: 'msi';
-}
-
-export interface AzureClientSecretCredentials extends AzureCredentialsBase {
-  authType: 'clientsecret';
-  azureCloud?: string;
-  tenantId?: string;
-  clientId?: string;
-  clientSecret?: string | ConcealedSecret;
-}
-
-export type AzureCredentials = AzureManagedIdentityCredentials | AzureClientSecretCredentials;
-
-export interface AzureDataSourceJsonData extends DataSourceJsonData {
-  cloudName: string;
-  azureAuthType?: AzureAuthType;
-
+export interface AzureMonitorDataSourceJsonData extends AzureDataSourceJsonData {
   // monitor
-  tenantId?: string;
-  clientId?: string;
   subscriptionId?: string;
+  basicLogsEnabled?: boolean;
 
   // logs
   /** @deprecated Azure Logs credentials */
@@ -78,8 +43,7 @@ export interface AzureDataSourceJsonData extends DataSourceJsonData {
   enableSecureSocksProxy?: boolean;
 }
 
-export interface AzureDataSourceSecureJsonData {
-  clientSecret?: string;
+export interface AzureMonitorDataSourceSecureJsonData extends AzureDataSourceSecureJsonData {
   appInsightsApiKey?: string;
 }
 
@@ -131,9 +95,32 @@ export interface AzureQueryEditorFieldProps {
   datasource: Datasource;
   subscriptionId?: string;
   variableOptionGroup: VariableOptionGroup;
+  schema?: EngineSchema;
+  range?: TimeRange;
 
   onQueryChange: (newQuery: AzureMonitorQuery) => void;
   setError: (source: string, error: AzureMonitorErrorish | undefined) => void;
+}
+
+// To avoid a type issue we redeclare the EngineSchema type from @kusto/monaco-kusto
+export interface EngineSchema {
+  clusterType: 'Engine';
+  cluster: {
+    connectionString: string;
+    databases: Database[];
+  };
+  database: Database | undefined;
+  globalScalarParameters?: ScalarParameter[];
+  globalTabularParameters?: TabularParameter[];
+}
+
+export interface Database {
+  name: string;
+  tables: AzureLogAnalyticsMetadataTable[];
+  functions: Function[];
+  majorVersion: number;
+  minorVersion: number;
+  entityGroups: EntityGroup[];
 }
 
 export interface FormatAsFieldProps extends AzureQueryEditorFieldProps {
@@ -142,6 +129,11 @@ export interface FormatAsFieldProps extends AzureQueryEditorFieldProps {
   defaultValue: ResultFormat;
   setFormatAs: (query: AzureMonitorQuery, formatAs: ResultFormat) => AzureMonitorQuery;
   resultFormat?: ResultFormat;
+  onLoad: (
+    query: AzureMonitorQuery,
+    defaultValue: ResultFormat,
+    handleChange: (change: SelectableValue<ResultFormat>) => void
+  ) => void;
 }
 
 export interface AzureResourceSummaryItem {
@@ -351,12 +343,8 @@ export interface ResourceGroup {
   type: string;
 }
 
-export interface Namespace {
-  classification: {
-    Custom: string;
-    Platform: string;
-    Qos: string;
-  };
+export interface MetricNamespace {
+  classification: 'Custom' | 'Platform' | 'Qos';
   id: string;
   name: string;
   properties: { metricNamespaceName: string };
@@ -387,3 +375,41 @@ interface MetricMetadataValue {
   name: AzureMonitorLocalizedValue;
   value: string;
 }
+
+export type Category = {
+  displayName: string;
+  id: string;
+  related: {
+    queries: string[];
+    tables: string[];
+  };
+};
+
+export type CheatsheetQuery = {
+  body: string;
+  description: string;
+  displayName: string;
+  id: string;
+  properties: {
+    ExampleQuery: boolean;
+    QueryAttributes: {
+      isMultiResource: boolean;
+    };
+  };
+  related: {
+    categories: string[];
+    resourceTypes: string[];
+    tables: string[];
+  };
+  tags: {
+    Topic: string[];
+  };
+};
+
+export type CheatsheetQueries = {
+  [key: string]: CheatsheetQuery[];
+};
+
+export type DropdownCategories = {
+  [key: string]: boolean;
+};

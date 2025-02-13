@@ -9,10 +9,10 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/components/simplejson"
 	"github.com/grafana/grafana/pkg/infra/tracing"
 	"github.com/grafana/grafana/pkg/plugins"
-	"github.com/grafana/grafana/pkg/services/auth/identity"
 	"github.com/grafana/grafana/pkg/services/datasources"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/pluginsintegration/plugincontext"
@@ -60,6 +60,7 @@ type Service struct {
 	dataService  backend.QueryDataHandler
 	pCtxProvider pluginContextProvider
 	features     featuremgmt.FeatureToggles
+	converter    *ResultConverter
 
 	pluginsClient backend.CallResourceHandler
 
@@ -82,6 +83,10 @@ func ProvideService(cfg *setting.Cfg, pluginClient plugins.Client, pCtxProvider 
 		tracer:        tracer,
 		metrics:       newMetrics(registerer),
 		pluginsClient: pluginClient,
+		converter: &ResultConverter{
+			Features: features,
+			Tracer:   tracer,
+		},
 	}
 }
 

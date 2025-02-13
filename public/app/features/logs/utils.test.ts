@@ -9,17 +9,22 @@ import {
   MutableDataFrame,
   DataFrame,
 } from '@grafana/data';
+import { getMockFrames } from 'app/plugins/datasource/loki/__mocks__/frames';
 
+import { logSeriesToLogsModel } from './logsModel';
 import {
   calculateLogsLabelStats,
   calculateStats,
   checkLogsError,
+  escapeUnescapedString,
+  createLogRowsMap,
   getLogLevel,
   getLogLevelFromKey,
   getLogsVolumeMaximumRange,
   logRowsToReadableJson,
   mergeLogsVolumeDataFrames,
   sortLogsResult,
+  checkLogsSampled,
 } from './utils';
 
 describe('getLoglevel()', () => {
@@ -59,8 +64,30 @@ describe('getLogLevelFromKey()', () => {
   it('returns correct log level when level is capitalized', () => {
     expect(getLogLevelFromKey('INFO')).toBe(LogLevel.info);
   });
-  it('returns unknown log level when level is integer', () => {
-    expect(getLogLevelFromKey(1)).toBe(LogLevel.unknown);
+  describe('Numeric log levels', () => {
+    it('returns critical', () => {
+      expect(getLogLevelFromKey(0)).toBe(LogLevel.critical);
+      expect(getLogLevelFromKey('0')).toBe(LogLevel.critical);
+      expect(getLogLevelFromKey('1')).toBe(LogLevel.critical);
+      expect(getLogLevelFromKey('2')).toBe(LogLevel.critical);
+    });
+    it('returns error', () => {
+      expect(getLogLevelFromKey('3')).toBe(LogLevel.error);
+    });
+    it('returns warning', () => {
+      expect(getLogLevelFromKey('4')).toBe(LogLevel.warning);
+    });
+    it('returns info', () => {
+      expect(getLogLevelFromKey('5')).toBe(LogLevel.info);
+      expect(getLogLevelFromKey('6')).toBe(LogLevel.info);
+    });
+    it('returns debug', () => {
+      expect(getLogLevelFromKey('7')).toBe(LogLevel.debug);
+    });
+    it('returns unknown log level when level is an unexpected integer', () => {
+      expect(getLogLevelFromKey('8')).toBe(LogLevel.unknown);
+      expect(getLogLevelFromKey(8)).toBe(LogLevel.unknown);
+    });
   });
 });
 
@@ -214,8 +241,36 @@ describe('checkLogsError()', () => {
       foo: 'boo',
     } as Labels,
   } as LogRowModel;
-  test('should return correct error if error is present', () => {
-    expect(checkLogsError(log)).toStrictEqual({ hasError: true, errorMessage: 'Error Message' });
+  test('should return the error if present', () => {
+    expect(checkLogsError(log)).toStrictEqual('Error Message');
+  });
+  test('should return undefined otherwise', () => {
+    expect(checkLogsError({ ...log, labels: {} })).toStrictEqual(undefined);
+  });
+});
+
+describe('checkLogsSampled()', () => {
+  const log = {
+    labels: {
+      __adaptive_logs_sampled__: 'true',
+      foo: 'boo',
+    } as Labels,
+  } as LogRowModel;
+  test('should return a message if is sampled', () => {
+    expect(checkLogsSampled(log)).toStrictEqual('Logs like this one have been dropped by Adaptive Logs');
+  });
+  test('should return an interpolated message if is sampled', () => {
+    expect(
+      checkLogsSampled({
+        ...log,
+        labels: {
+          __adaptive_logs_sampled__: '10',
+        },
+      })
+    ).toStrictEqual('10% of logs like this one have been dropped by Adaptive Logs');
+  });
+  test('should return undefined otherwise', () => {
+    expect(checkLogsSampled({ ...log, labels: {} })).toStrictEqual(undefined);
   });
 });
 
@@ -407,6 +462,33 @@ describe('mergeLogsVolumeDataFrames', () => {
     ]);
     expect(maximum).toBe(6);
   });
+
+  it('produces merged results order by time', () => {
+    const frame1 = mockLogVolume('info', [1600000000001, 1600000000009], [1, 1]);
+    const frame2 = mockLogVolume('info', [1600000000000, 1600000000005], [1, 1]);
+
+    const { dataFrames: merged } = mergeLogsVolumeDataFrames([frame1, frame2]);
+
+    expect(merged).toMatchObject([
+      {
+        fields: [
+          {
+            name: 'Time',
+            type: FieldType.time,
+            values: [1600000000000, 1600000000001, 1600000000005, 1600000000009],
+          },
+          {
+            name: 'Value',
+            type: FieldType.number,
+            values: [1, 1, 1, 1],
+            config: {
+              displayNameFromDS: 'info',
+            },
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('getLogsVolumeDimensions', () => {
@@ -440,5 +522,60 @@ describe('getLogsVolumeDimensions', () => {
     ]);
 
     expect(maximumRange).toEqual({ from: 5, to: 25 });
+  });
+});
+
+describe('escapeUnescapedString', () => {
+  it('does not modify strings without unescaped characters', () => {
+    expect(escapeUnescapedString('a simple string')).toBe('a simple string');
+  });
+  it('escapes unescaped strings', () => {
+    expect(escapeUnescapedString(`\\r\\n|\\n|\\t|\\r`)).toBe(`\n|\n|\t|\n`);
+  });
+});
+
+describe('findMatchingRow', () => {
+  function setup(frames: DataFrame[]) {
+    const logsModel = logSeriesToLogsModel(frames);
+    const rows = logsModel?.rows || [];
+    const findMatchingRow = createLogRowsMap();
+    for (const row of rows) {
+      expect(findMatchingRow(row)).toBeFalsy();
+    }
+    return { rows, findMatchingRow };
+  }
+
+  it('ignores rows from different queries', () => {
+    const { logFrameA, logFrameB } = getMockFrames();
+    logFrameA.refId = 'A';
+    logFrameB.refId = 'B';
+    const { rows, findMatchingRow } = setup([logFrameA, logFrameB]);
+
+    for (const row of rows) {
+      const targetRow = { ...row, dataFrame: { ...logFrameA, refId: 'Z' } };
+      expect(findMatchingRow(targetRow)).toBeFalsy();
+    }
+  });
+
+  it('matches rows by rowId', () => {
+    const { logFrameA, logFrameB } = getMockFrames();
+    const { rows, findMatchingRow } = setup([logFrameA, logFrameB]);
+
+    for (const row of rows) {
+      const targetRow = { ...row, entry: `${Math.random()}`, timeEpochNs: `${Math.ceil(Math.random() * 1000000)}` };
+      expect(findMatchingRow(targetRow)).toBeTruthy();
+    }
+  });
+
+  it('matches rows by entry and nanosecond time', () => {
+    const { logFrameA, logFrameB } = getMockFrames();
+    logFrameA.fields[4].values = [];
+    logFrameB.fields[4].values = [];
+    const { rows, findMatchingRow } = setup([logFrameA, logFrameB]);
+
+    for (const row of rows) {
+      const targetRow = { ...row, rowId: undefined };
+      expect(findMatchingRow(targetRow)).toBeTruthy();
+    }
   });
 });

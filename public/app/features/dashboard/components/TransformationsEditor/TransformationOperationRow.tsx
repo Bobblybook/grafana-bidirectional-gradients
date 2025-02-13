@@ -1,29 +1,37 @@
-import React, { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useToggle } from 'react-use';
+import { mergeMap } from 'rxjs';
 
-import { DataFrame, DataTransformerConfig, TransformerRegistryItem, FrameMatcherID } from '@grafana/data';
-import { reportInteraction } from '@grafana/runtime';
+import {
+  DataTransformerConfig,
+  TransformerRegistryItem,
+  FrameMatcherID,
+  DataTransformContext,
+  getFrameMatchers,
+  transformDataFrame,
+  DataFrame,
+} from '@grafana/data';
+import { selectors } from '@grafana/e2e-selectors';
+import { getTemplateSrv, reportInteraction } from '@grafana/runtime';
 import { ConfirmModal } from '@grafana/ui';
-import { OperationRowHelp } from 'app/core/components/QueryOperationRow/OperationRowHelp';
 import {
   QueryOperationAction,
   QueryOperationToggleAction,
 } from 'app/core/components/QueryOperationRow/QueryOperationAction';
-import {
-  QueryOperationRow,
-  QueryOperationRowRenderProps,
-} from 'app/core/components/QueryOperationRow/QueryOperationRow';
+import { QueryOperationRow } from 'app/core/components/QueryOperationRow/QueryOperationRow';
 import config from 'app/core/config';
 import { PluginStateInfo } from 'app/features/plugins/components/PluginStateInfo';
 
 import { TransformationEditor } from './TransformationEditor';
+import { TransformationEditorHelpDisplay } from './TransformationEditorHelpDisplay';
 import { TransformationFilter } from './TransformationFilter';
+import { TransformationData } from './TransformationsEditor';
 import { TransformationsEditorTransformation } from './types';
 
 interface TransformationOperationRowProps {
   id: string;
   index: number;
-  data: DataFrame[];
+  data: TransformationData;
   uiConfig: TransformerRegistryItem<null>;
   configs: TransformationsEditorTransformation[];
   onRemove: (index: number) => void;
@@ -43,8 +51,13 @@ export const TransformationOperationRow = ({
   const [showDebug, toggleShowDebug] = useToggle(false);
   const [showHelp, toggleShowHelp] = useToggle(false);
   const disabled = !!configs[index].transformation.disabled;
-  const filter = configs[index].transformation.filter != null;
-  const showFilter = filter || data.length > 1;
+  const topic = configs[index].transformation.topic;
+  const showFilterEditor = configs[index].transformation.filter != null || topic != null;
+  const showFilterToggle = showFilterEditor || data.series.length > 0 || (data.annotations?.length ?? 0) > 0;
+  const [input, setInput] = useState<DataFrame[]>([]);
+  const [output, setOutput] = useState<DataFrame[]>([]);
+  // output of previous transformation
+  const [prevOutput, setPrevOutput] = useState<DataFrame[]>([]);
 
   const onDisableToggle = useCallback(
     (index: number) => {
@@ -56,16 +69,6 @@ export const TransformationOperationRow = ({
     },
     [onChange, configs]
   );
-
-  const toggleExpand = useCallback(() => {
-    if (showHelp) {
-      return true;
-    }
-
-    // We return `undefined` here since the QueryOperationRow component ignores an `undefined` value for the `isOpen` prop.
-    // If we returned `false` here, the row would be collapsed when the user toggles off `showHelp`, which is not what we want.
-    return undefined;
-  }, [showHelp]);
 
   // Adds or removes the frame filter
   const toggleFilter = useCallback(() => {
@@ -101,7 +104,49 @@ export const TransformationOperationRow = ({
     [configs, index]
   );
 
-  const renderActions = ({ isOpen }: QueryOperationRowRenderProps) => {
+  useEffect(() => {
+    const config = configs[index].transformation;
+    const matcher = config.filter?.options ? getFrameMatchers(config.filter) : undefined;
+    // we need previous transformation index to get its outputs
+    //    to be used in this transforms inputs
+    const prevTransformIndex = index - 1;
+
+    let prevInputTransforms: Array<DataTransformerConfig<{}>> = [];
+    let prevOutputTransforms: Array<DataTransformerConfig<{}>> = [];
+
+    if (prevTransformIndex >= 0) {
+      prevInputTransforms = configs.slice(0, prevTransformIndex).map((t) => t.transformation);
+      prevOutputTransforms = configs.slice(prevTransformIndex, index).map((t) => t.transformation);
+    }
+
+    const inputTransforms = configs.slice(0, index).map((t) => t.transformation);
+    const outputTransforms = configs.slice(index, index + 1).map((t) => t.transformation);
+
+    const ctx: DataTransformContext = {
+      interpolate: (v: string) => getTemplateSrv().replace(v),
+    };
+
+    const inputSubscription = transformDataFrame(inputTransforms, data.series, ctx).subscribe((data) => {
+      if (matcher) {
+        data = data.filter((frame) => matcher(frame));
+      }
+      setInput(data);
+    });
+    const outputSubscription = transformDataFrame(inputTransforms, data.series, ctx)
+      .pipe(mergeMap((before) => transformDataFrame(outputTransforms, before, ctx)))
+      .subscribe(setOutput);
+    const prevOutputSubscription = transformDataFrame(prevInputTransforms, data.series, ctx)
+      .pipe(mergeMap((before) => transformDataFrame(prevOutputTransforms, before, ctx)))
+      .subscribe(setPrevOutput);
+
+    return function unsubscribe() {
+      inputSubscription.unsubscribe();
+      outputSubscription.unsubscribe();
+      prevOutputSubscription.unsubscribe();
+    };
+  }, [index, data, configs]);
+
+  const renderActions = () => {
     return (
       <>
         {uiConfig.state && <PluginStateInfo state={uiConfig.state} />}
@@ -109,20 +154,19 @@ export const TransformationOperationRow = ({
           title="Show transform help"
           icon="info-circle"
           // `instrumentToggleCallback` expects a function that takes a MouseEvent, is unused in the state setter. Instead, we simply toggle the state.
-          onClick={instrumentToggleCallback((_e) => toggleShowHelp(!showHelp), 'help', showHelp)}
-          active={!!showHelp}
+          onClick={instrumentToggleCallback(toggleShowHelp, 'help', showHelp)}
+          active={showHelp}
         />
-        {showFilter && (
+        {showFilterToggle && (
           <QueryOperationToggleAction
             title="Filter"
             icon="filter"
-            onClick={instrumentToggleCallback(toggleFilter, 'filter', filter)}
-            active={filter}
+            onClick={instrumentToggleCallback(toggleFilter, 'filter', showFilterEditor)}
+            active={showFilterEditor}
           />
         )}
         <QueryOperationToggleAction
           title="Debug"
-          disabled={!isOpen}
           icon="bug"
           onClick={instrumentToggleCallback(toggleShowDebug, 'debug', showDebug)}
           active={showDebug}
@@ -132,6 +176,7 @@ export const TransformationOperationRow = ({
           icon={disabled ? 'eye-slash' : 'eye'}
           onClick={instrumentToggleCallback(() => onDisableToggle(index), 'disabled', disabled)}
           active={disabled}
+          dataTestId={selectors.components.Transforms.disableTransformationButton}
         />
         <QueryOperationAction
           title="Remove"
@@ -157,41 +202,41 @@ export const TransformationOperationRow = ({
   };
 
   return (
-    <QueryOperationRow
-      id={id}
-      index={index}
-      title={uiConfig.name}
-      draggable
-      actions={renderActions}
-      disabled={disabled}
-      isOpen={toggleExpand()}
-      // Assure that showHelp is untoggled when the row becomes collapsed.
-      onClose={() => toggleShowHelp(false)}
-    >
-      {showHelp && <OperationRowHelp markdown={prepMarkdown(uiConfig)} />}
-      {filter && (
-        <TransformationFilter index={index} config={configs[index].transformation} data={data} onChange={onChange} />
-      )}
-      <TransformationEditor
-        debugMode={showDebug}
+    <>
+      <QueryOperationRow
+        id={id}
         index={index}
-        data={data}
-        configs={configs}
-        uiConfig={uiConfig}
-        onChange={onChange}
-      />
-    </QueryOperationRow>
+        title={`${index + 1} - ${uiConfig.name}`}
+        draggable
+        actions={renderActions}
+        disabled={disabled}
+        expanderMessages={{
+          close: 'Collapse transformation row',
+          open: 'Expand transformation row',
+        }}
+      >
+        {showFilterEditor && (
+          <TransformationFilter
+            data={prevOutput}
+            index={index}
+            config={configs[index].transformation}
+            annotations={data.annotations}
+            onChange={onChange}
+          />
+        )}
+
+        <TransformationEditor
+          input={input}
+          output={output}
+          debugMode={showDebug}
+          index={index}
+          configs={configs}
+          uiConfig={uiConfig}
+          onChange={onChange}
+          toggleShowDebug={toggleShowDebug}
+        />
+      </QueryOperationRow>
+      <TransformationEditorHelpDisplay transformer={uiConfig} isOpen={showHelp} onCloseClick={toggleShowHelp} />
+    </>
   );
 };
-
-function prepMarkdown(uiConfig: TransformerRegistryItem<null>) {
-  let helpMarkdown = uiConfig.help ?? uiConfig.description;
-
-  return `
-${helpMarkdown}
-
-Go the <a href="https://grafana.com/docs/grafana/latest/panels/transformations/?utm_source=grafana" target="_blank" rel="noreferrer">
-transformation documentation
-</a> for more.
-`;
-}

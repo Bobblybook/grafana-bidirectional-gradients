@@ -1,27 +1,29 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
-import { DataFrame, FieldMatcherID, getFrameDisplayName, PanelProps, SelectableValue } from '@grafana/data';
-import { PanelDataErrorView, reportInteraction } from '@grafana/runtime';
+import {
+  ActionModel,
+  DashboardCursorSync,
+  DataFrame,
+  FieldMatcherID,
+  getFrameDisplayName,
+  InterpolateFunction,
+  PanelProps,
+  SelectableValue,
+  Field,
+} from '@grafana/data';
+import { config, PanelDataErrorView } from '@grafana/runtime';
 import { Select, Table, usePanelContext, useTheme2 } from '@grafana/ui';
 import { TableSortByFieldState } from '@grafana/ui/src/components/Table/types';
+
+import { getActions } from '../../../features/actions/utils';
 
 import { hasDeprecatedParentRowIndex, migrateFromParentRowIndexToNestedFrames } from './migrations';
 import { Options } from './panelcfg.gen';
 
-export const INTERACTION_EVENT_NAME = 'table_panel_usage';
-export const INTERACTION_ITEM = {
-  COLUMN_RESIZE: 'column_resize',
-  SORT_BY: 'sort_by',
-  TABLE_SELECTION_CHANGE: 'table_selection_change',
-  ERROR_VIEW: 'error_view',
-  CELL_TYPE_CHANGE: 'cell_type_change',
-};
-
 interface Props extends PanelProps<Options> {}
 
 export function TablePanel(props: Props) {
-  const { data, height, width, options, fieldConfig, id, timeRange } = props;
+  const { data, height, width, options, fieldConfig, id, timeRange, replaceVariables } = props;
 
   const theme = useTheme2();
   const panelContext = usePanelContext();
@@ -29,15 +31,13 @@ export function TablePanel(props: Props) {
     ? migrateFromParentRowIndexToNestedFrames(data.series)
     : data.series;
   const count = frames?.length;
-  const hasFields = frames[0]?.fields.length;
+  const hasFields = frames.some((frame) => frame.fields.length > 0);
   const currentIndex = getCurrentFrameIndex(frames, options);
   const main = frames[currentIndex];
 
   let tableHeight = height;
 
   if (!count || !hasFields) {
-    reportInteraction(INTERACTION_EVENT_NAME, { item: INTERACTION_ITEM.ERROR_VIEW });
-
     return <PanelDataErrorView panelId={id} fieldConfig={fieldConfig} data={data} />;
   }
 
@@ -47,6 +47,8 @@ export function TablePanel(props: Props) {
 
     tableHeight = height - inputHeight - padding;
   }
+
+  const enableSharedCrosshair = panelContext.sync && panelContext.sync() !== DashboardCursorSync.Off;
 
   const tableElement = (
     <Table
@@ -64,6 +66,10 @@ export function TablePanel(props: Props) {
       enablePagination={options.footer?.enablePagination}
       cellHeight={options.cellHeight}
       timeRange={timeRange}
+      enableSharedCrosshair={config.featureToggles.tableSharedCrosshair && enableSharedCrosshair}
+      fieldConfig={fieldConfig}
+      getActions={getCellActions}
+      replaceVariables={replaceVariables}
     />
   );
 
@@ -117,8 +123,6 @@ function onColumnResize(fieldDisplayName: string, width: number, props: Props) {
     });
   }
 
-  reportInteraction(INTERACTION_EVENT_NAME, { item: INTERACTION_ITEM.COLUMN_RESIZE });
-
   props.onFieldConfigChange({
     ...fieldConfig,
     overrides,
@@ -126,8 +130,6 @@ function onColumnResize(fieldDisplayName: string, width: number, props: Props) {
 }
 
 function onSortByChange(sortBy: TableSortByFieldState[], props: Props) {
-  reportInteraction(INTERACTION_EVENT_NAME, { item: INTERACTION_ITEM.SORT_BY });
-
   props.onOptionsChange({
     ...props.options,
     sortBy,
@@ -135,22 +137,56 @@ function onSortByChange(sortBy: TableSortByFieldState[], props: Props) {
 }
 
 function onChangeTableSelection(val: SelectableValue<number>, props: Props) {
-  reportInteraction(INTERACTION_EVENT_NAME, { item: INTERACTION_ITEM.TABLE_SELECTION_CHANGE });
-
   props.onOptionsChange({
     ...props.options,
     frameIndex: val.value || 0,
   });
 }
 
+// placeholder function; assuming the values are already interpolated
+const replaceVars: InterpolateFunction = (value: string) => value;
+
+const getCellActions = (
+  dataFrame: DataFrame,
+  field: Field,
+  rowIndex: number,
+  replaceVariables: InterpolateFunction | undefined
+) => {
+  if (!config.featureToggles?.vizActions) {
+    return [];
+  }
+
+  const actions: Array<ActionModel<Field>> = [];
+  const actionLookup = new Set<string>();
+
+  const actionsModel = getActions(
+    dataFrame,
+    field,
+    field.state!.scopedVars!,
+    replaceVariables ?? replaceVars,
+    field.config.actions ?? [],
+    { valueRowIndex: rowIndex }
+  );
+
+  actionsModel.forEach((action) => {
+    const key = `${action.title}`;
+    if (!actionLookup.has(key)) {
+      actions.push(action);
+      actionLookup.add(key);
+    }
+  });
+
+  return actions;
+};
+
 const tableStyles = {
-  wrapper: css`
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    height: 100%;
-  `,
-  selectWrapper: css`
-    padding: 8px 8px 0px 8px;
-  `,
+  wrapper: css({
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    height: '100%',
+  }),
+  selectWrapper: css({
+    padding: '8px 8px 0px 8px',
+  }),
 };

@@ -6,13 +6,15 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/influxdata/influxql"
 
 	"github.com/grafana/grafana/pkg/components/simplejson"
+	"github.com/grafana/grafana/pkg/infra/log"
 )
 
 type InfluxdbQueryParser struct{}
 
-func QueryParse(query backend.DataQuery) (*Query, error) {
+func QueryParse(query backend.DataQuery, logger log.Logger) (*Query, error) {
 	model, err := simplejson.NewJson(query.JSON)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't unmarshal query")
@@ -26,8 +28,8 @@ func QueryParse(query backend.DataQuery) (*Query, error) {
 	limit := model.Get("limit").MustString("")
 	slimit := model.Get("slimit").MustString("")
 	orderByTime := model.Get("orderByTime").MustString("")
-
 	measurement := model.Get("measurement").MustString("")
+	resultFormat := model.Get("resultFormat").MustString("")
 
 	tags, err := parseTags(model)
 	if err != nil {
@@ -53,20 +55,30 @@ func QueryParse(query backend.DataQuery) (*Query, error) {
 		interval = minInterval
 	}
 
+	var statement influxql.Statement
+	if useRawQuery {
+		statement, err = influxql.ParseStatement(rawQuery)
+		if err != nil {
+			logger.Debug(fmt.Sprintf("Couldn't parse raw query: %v", err), "rawQuery", rawQuery)
+		}
+	}
+
 	return &Query{
-		Measurement: measurement,
-		Policy:      policy,
-		GroupBy:     groupBys,
-		Tags:        tags,
-		Selects:     selects,
-		RawQuery:    rawQuery,
-		Interval:    interval,
-		Alias:       alias,
-		UseRawQuery: useRawQuery,
-		Tz:          tz,
-		Limit:       limit,
-		Slimit:      slimit,
-		OrderByTime: orderByTime,
+		Measurement:  measurement,
+		Policy:       policy,
+		GroupBy:      groupBys,
+		Tags:         tags,
+		Selects:      selects,
+		RawQuery:     rawQuery,
+		Interval:     interval,
+		Alias:        alias,
+		UseRawQuery:  useRawQuery,
+		Tz:           tz,
+		Limit:        limit,
+		Slimit:       slimit,
+		OrderByTime:  orderByTime,
+		ResultFormat: resultFormat,
+		Statement:    statement,
 	}, nil
 }
 

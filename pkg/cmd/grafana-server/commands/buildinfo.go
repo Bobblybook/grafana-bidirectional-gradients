@@ -5,21 +5,24 @@ import (
 	"time"
 
 	"github.com/grafana/grafana/pkg/extensions"
-	"github.com/grafana/grafana/pkg/infra/metrics"
+	"github.com/grafana/grafana/pkg/services/apiserver/standalone"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
-func setBuildInfo(opts ServerOptions) {
+func getBuildstamp(opts standalone.BuildInfo) int64 {
 	buildstampInt64, err := strconv.ParseInt(opts.BuildStamp, 10, 64)
 	if err != nil || buildstampInt64 == 0 {
 		buildstampInt64 = time.Now().Unix()
 	}
+	return buildstampInt64
+}
+
+func SetBuildInfo(opts standalone.BuildInfo) {
 	setting.BuildVersion = opts.Version
 	setting.BuildCommit = opts.Commit
-	setting.BuildStamp = buildstampInt64
+	setting.EnterpriseBuildCommit = opts.EnterpriseCommit
+	setting.BuildStamp = getBuildstamp(opts)
 	setting.BuildBranch = opts.BuildBranch
 	setting.IsEnterprise = extensions.IsEnterprise
 	setting.Packaging = validPackaging(Packaging)
-
-	metrics.SetBuildInformation(opts.Version, opts.Commit, opts.BuildBranch, buildstampInt64)
 }

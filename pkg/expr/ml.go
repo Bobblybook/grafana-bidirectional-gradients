@@ -15,8 +15,8 @@ import (
 	"github.com/grafana/grafana/pkg/api/response"
 	"github.com/grafana/grafana/pkg/expr/mathexp"
 	"github.com/grafana/grafana/pkg/expr/ml"
+	"github.com/grafana/grafana/pkg/plugins"
 	"github.com/grafana/grafana/pkg/plugins/httpresponsesender"
-	"github.com/grafana/grafana/pkg/services/pluginsintegration/plugincontext"
 )
 
 var (
@@ -64,7 +64,7 @@ func (m *MLNode) Execute(ctx context.Context, now time.Time, _ mathexp.Vars, s *
 	// get the plugin configuration that will be used by client (auth, host, etc)
 	pCtx, err := s.pCtxProvider.Get(ctx, mlPluginID, m.request.User, m.request.OrgId)
 	if err != nil {
-		if errors.Is(err, plugincontext.ErrPluginNotFound) {
+		if errors.Is(err, plugins.ErrPluginNotRegistered) {
 			return result, errMLPluginDoesNotExist
 		}
 		return result, fmt.Errorf("failed to get plugin settings: %w", err)
@@ -124,13 +124,13 @@ func (m *MLNode) Execute(ctx context.Context, now time.Time, _ mathexp.Vars, s *
 		data = &backend.QueryDataResponse{Responses: map[string]backend.DataResponse{}}
 	}
 
-	dataFrames, err := getResponseFrame(data, m.refID)
+	dataFrames, err := getResponseFrame(logger, data, m.refID)
 	if err != nil {
 		return mathexp.Results{}, MakeQueryError(m.refID, "ml", err)
 	}
 
 	// process the response the same way DSNode does. Use plugin ID as data source type. Semantically, they are the same.
-	responseType, result, err = convertDataFramesToResults(ctx, dataFrames, mlPluginID, s, logger)
+	responseType, result, err = s.converter.Convert(ctx, mlPluginID, dataFrames)
 	return result, err
 }
 

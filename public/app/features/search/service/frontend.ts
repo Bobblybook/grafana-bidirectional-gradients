@@ -3,7 +3,7 @@ import uFuzzy from '@leeoniya/ufuzzy';
 import { DataFrameView, SelectableValue } from '@grafana/data';
 import { TermCount } from 'app/core/components/TagFilter/TagFilter';
 
-import { DashboardQueryResult, GrafanaSearcher, QueryResponse, SearchQuery } from '.';
+import { DashboardQueryResult, GrafanaSearcher, QueryResponse, SearchQuery } from './types';
 
 export class FrontendSearcher implements GrafanaSearcher {
   readonly cache = new Map<string, Promise<FullResultCache>>();
@@ -116,7 +116,7 @@ class FullResultCache {
     // eslint-disable-next-line
     const values = allFields.map((v) => [] as any[]); // empty value for each field
 
-    let [idxs, info, order] = this.ufuzzy.search(haystack, query, true);
+    let [idxs, info, order] = this.ufuzzy.search(haystack, query, 5);
 
     for (let c = 0; c < allFields.length; c++) {
       let src = allFields[c].values;

@@ -1,19 +1,22 @@
 import { createAction } from '@reduxjs/toolkit';
+import { isEqual } from 'lodash';
 import { AnyAction } from 'redux';
 
-import { SplitOpenOptions, TimeRange } from '@grafana/data';
+import { SplitOpenOptions, TimeRange, EventBusSrv } from '@grafana/data';
 import { locationService } from '@grafana/runtime';
 import { generateExploreId, GetExploreUrlArguments } from 'app/core/utils/explore';
-import { PanelModel } from 'app/features/dashboard/state';
-import { ExploreItemState, ExploreState } from 'app/types/explore';
+import { PanelModel } from 'app/features/dashboard/state/PanelModel';
+import { getTemplateSrv } from 'app/features/templating/template_srv';
+import { CorrelationEditorDetailsUpdate, ExploreItemState, ExploreState } from 'app/types/explore';
 
 import { RichHistoryResults } from '../../../core/history/RichHistoryStorage';
 import { RichHistorySearchFilters, RichHistorySettings } from '../../../core/utils/richHistoryTypes';
 import { createAsyncThunk, ThunkResult } from '../../../types';
 import { withUniqueRefIds } from '../utils/queries';
 
+import { DEFAULT_RANGE } from './constants';
 import { initializeExplore, InitializeExploreOptions, paneReducer } from './explorePane';
-import { DEFAULT_RANGE, makeExplorePaneState } from './utils';
+import { makeExplorePaneState } from './utils';
 
 //
 // Actions and Payloads
@@ -24,7 +27,7 @@ export interface SyncTimesPayload {
 }
 export const syncTimesAction = createAction<SyncTimesPayload>('explore/syncTimes');
 
-export const richHistoryUpdatedAction = createAction<{ richHistoryResults: RichHistoryResults; exploreId: string }>(
+export const richHistoryUpdatedAction = createAction<{ richHistoryResults: RichHistoryResults }>(
   'explore/richHistoryUpdated'
 );
 export const richHistoryStorageFullAction = createAction('explore/richHistoryStorageFullAction');
@@ -32,7 +35,6 @@ export const richHistoryLimitExceededAction = createAction('explore/richHistoryL
 
 export const richHistorySettingsUpdatedAction = createAction<RichHistorySettings>('explore/richHistorySettingsUpdated');
 export const richHistorySearchFiltersUpdatedAction = createAction<{
-  exploreId: string;
   filters?: RichHistorySearchFilters;
 }>('explore/richHistorySearchFiltersUpdatedAction');
 
@@ -59,15 +61,16 @@ export const setPaneState = createAction<SetPaneStateActionPayload>('explore/set
 export const clearPanes = createAction('explore/clearPanes');
 
 /**
- * Ensure Explore doesn't exceed supported number of panes and initializes the new pane.
+ * Creates a new Explore pane.
+ * If 2 panes already exist, the last one (right) is closed before creating a new one.
  */
 export const splitOpen = createAsyncThunk(
   'explore/splitOpen',
-  async (options: SplitOpenOptions | undefined, { getState, dispatch, requestId }) => {
+  async (options: SplitOpenOptions | undefined, { getState, dispatch }) => {
     // we currently support showing only 2 panes in explore, so if this action is dispatched we know it has been dispatched from the "first" pane.
     const originState = Object.values(getState().explore.panes)[0];
 
-    const queries = options?.queries ?? (options?.query ? [options?.query] : originState?.queries || []);
+    const queries = options?.queries ?? originState?.queries ?? [];
 
     Object.keys(getState().explore.panes).forEach((paneId, index) => {
       // Only 2 panes are supported. Remove panes before create a new one.
@@ -76,18 +79,29 @@ export const splitOpen = createAsyncThunk(
       }
     });
 
+    const splitRange = options?.range || originState?.range.raw || DEFAULT_RANGE;
+
+    let newPaneId = generateExploreId();
+    // in case we have a duplicate id, generate a new one
+    while (getState().explore.panes[newPaneId]) {
+      newPaneId = generateExploreId();
+    }
+
     await dispatch(
       createNewSplitOpenPane({
-        exploreId: requestId,
+        exploreId: newPaneId,
         datasource: options?.datasourceUid || originState?.datasourceInstance?.getRef(),
         queries: withUniqueRefIds(queries),
-        range: options?.range || originState?.range.raw || DEFAULT_RANGE,
+        range: splitRange,
         panelsState: options?.panelsState || originState?.panelsState,
+        correlationHelperData: options?.correlationHelperData,
+        eventBridge: new EventBusSrv(),
       })
     );
-  },
-  {
-    idGenerator: generateExploreId,
+
+    if (originState?.range) {
+      await dispatch(syncTimesAction({ syncedTimes: isEqual(originState.range.raw, splitRange) })); // if time ranges are equal, mark times as synced
+    }
   }
 );
 
@@ -102,6 +116,13 @@ const createNewSplitOpenPane = createAsyncThunk(
   async (options: InitializeExploreOptions, { dispatch }) => {
     await dispatch(initializeExplore(options));
   }
+);
+
+/**
+ * Moves explore into and out of correlations editor mode
+ */
+export const changeCorrelationEditorDetails = createAction<CorrelationEditorDetailsUpdate>(
+  'explore/changeCorrelationEditorDetails'
 );
 
 export interface NavigateToExploreDependencies {
@@ -122,6 +143,7 @@ export const navigateToExplore = (
       dsRef: panel.datasource,
       scopedVars: panel.scopedVars,
       timeRange,
+      adhocFilters: getTemplateSrv().getAdhocFilters(panel.datasource?.uid ?? '', true),
     });
 
     if (openInNewWindow && path) {
@@ -136,15 +158,17 @@ export const navigateToExplore = (
 /**
  * Global Explore state that handles multiple Explore areas and the split state
  */
-const initialExploreItemState = makeExplorePaneState();
+const initialExploreItemState = () => makeExplorePaneState();
 export const initialExploreState: ExploreState = {
   syncedTimes: false,
   panes: {},
+  correlationEditorDetails: { editorMode: false, correlationDirty: false, queryEditorDirty: false, isExiting: false },
   richHistoryStorageFull: false,
   richHistoryLimitExceededWarningShown: false,
   largerExploreId: undefined,
   maxedExploreId: undefined,
   evenSplitPanes: true,
+  richHistory: [],
 };
 
 /**
@@ -220,21 +244,38 @@ export const exploreReducer = (state = initialExploreState, action: AnyAction): 
     };
   }
 
+  if (richHistoryUpdatedAction.match(action)) {
+    const { richHistory, total } = action.payload.richHistoryResults;
+    return {
+      ...state,
+      richHistory,
+      richHistoryTotal: total,
+    };
+  }
+
+  if (richHistorySearchFiltersUpdatedAction.match(action)) {
+    const richHistorySearchFilters = action.payload.filters;
+    return {
+      ...state,
+      richHistorySearchFilters,
+    };
+  }
+
   if (createNewSplitOpenPane.pending.match(action)) {
     return {
       ...state,
       panes: {
         ...state.panes,
-        [action.meta.arg.exploreId]: initialExploreItemState,
+        [action.meta.arg.exploreId]: initialExploreItemState(),
       },
     };
   }
 
-  if (initializeExplore.pending.match(action)) {
+  if (initializeExplore?.pending.match(action)) {
     const initialPanes = Object.entries(state.panes);
     const before = initialPanes.slice(0, action.meta.arg.position);
     const after = initialPanes.slice(before.length);
-    const panes = [...before, [action.meta.arg.exploreId, initialExploreItemState] as const, ...after].reduce(
+    const panes = [...before, [action.meta.arg.exploreId, initialExploreItemState()] as const, ...after].reduce(
       (acc, [id, pane]) => ({ ...acc, [id]: pane }),
       {}
     );
@@ -249,6 +290,34 @@ export const exploreReducer = (state = initialExploreState, action: AnyAction): 
     return {
       ...state,
       panes: {},
+    };
+  }
+
+  if (changeCorrelationEditorDetails.match(action)) {
+    const {
+      editorMode,
+      label,
+      description,
+      canSave,
+      correlationDirty,
+      queryEditorDirty,
+      isExiting,
+      postConfirmAction,
+      transformations,
+    } = action.payload;
+    return {
+      ...state,
+      correlationEditorDetails: {
+        editorMode: Boolean(editorMode ?? state.correlationEditorDetails?.editorMode),
+        canSave: Boolean(canSave ?? state.correlationEditorDetails?.canSave),
+        label: label ?? state.correlationEditorDetails?.label,
+        description: description ?? state.correlationEditorDetails?.description,
+        transformations: transformations ?? state.correlationEditorDetails?.transformations,
+        correlationDirty: Boolean(correlationDirty ?? state.correlationEditorDetails?.correlationDirty),
+        queryEditorDirty: Boolean(queryEditorDirty ?? state.correlationEditorDetails?.queryEditorDirty),
+        isExiting: Boolean(isExiting ?? state.correlationEditorDetails?.isExiting),
+        postConfirmAction,
+      },
     };
   }
 

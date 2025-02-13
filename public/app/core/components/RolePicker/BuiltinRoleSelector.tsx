@@ -1,23 +1,14 @@
-import React from 'react';
-
 import { SelectableValue } from '@grafana/data';
-import { config } from '@grafana/runtime';
 import { Icon, RadioButtonList, Tooltip, useStyles2, useTheme2, PopoverContent } from '@grafana/ui';
-import { contextSrv } from 'app/core/core';
+import { Trans } from 'app/core/internationalization';
 import { OrgRole } from 'app/types';
 
 import { getStyles } from './styles';
 
-const noBasicRoleFlag = contextSrv.licensedAccessControlEnabled();
-
-const noBasicRole = config.featureToggles.noBasicRole && noBasicRoleFlag;
-
-const BasicRoleOption: Array<SelectableValue<OrgRole>> = Object.values(OrgRole)
-  .filter((r) => noBasicRole || r !== OrgRole.None)
-  .map((r) => ({
-    label: r === OrgRole.None ? 'No basic role' : r,
-    value: r,
-  }));
+const BasicRoleOption: Array<SelectableValue<OrgRole>> = Object.values(OrgRole).map((r) => ({
+  label: r === OrgRole.None ? 'No basic role' : r,
+  value: r,
+}));
 
 interface Props {
   value?: OrgRole;
@@ -34,7 +25,9 @@ export const BuiltinRoleSelector = ({ value, onChange, disabled, disabledMesssag
   return (
     <>
       <div className={styles.groupHeader}>
-        <span style={{ marginRight: theme.spacing(1) }}>Basic roles</span>
+        <span style={{ marginRight: theme.spacing(1) }}>
+          <Trans i18nKey="role-picker.built-in.basic-roles">Basic roles</Trans>
+        </span>
         {disabled && disabledMesssage && (
           <Tooltip placement="right-end" interactive={true} content={<div>{disabledMesssage}</div>}>
             <Icon name="question-circle" />

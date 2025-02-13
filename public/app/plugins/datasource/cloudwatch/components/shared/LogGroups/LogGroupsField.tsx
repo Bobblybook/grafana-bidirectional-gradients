@@ -1,5 +1,5 @@
 import { css } from '@emotion/css';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { config } from '@grafana/runtime';
 
@@ -23,10 +23,14 @@ type Props = {
   onBeforeOpen?: () => void;
 };
 
-const rowGap = css`
-  gap: 3px;
-`;
-
+const logGroupStyles = css({
+  display: 'flex',
+  flexDirection: 'column',
+  marginTop: 8,
+  '& div:first-child': {
+    marginBottom: 8,
+  },
+});
 // used in Config Editor and in Log Query Editor
 export const LogGroupsField = ({
   datasource,
@@ -74,7 +78,7 @@ export const LogGroupsField = ({
   }, [datasource, legacyLogGroupNames, logGroups, onChange, region, loadingLogGroupsStarted]);
 
   return (
-    <div className={`gf-form gf-form--grow flex-grow-1 ${rowGap}`}>
+    <div className={logGroupStyles}>
       <LogGroupsSelector
         fetchLogGroups={async (params: Partial<DescribeLogGroupsRequest>) =>
           datasource?.resources.getLogGroups({ region: region, ...params }) ?? []

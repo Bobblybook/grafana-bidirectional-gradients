@@ -4,7 +4,7 @@
 //     public/app/plugins/gen.go
 // Using jennies:
 //     TSTypesJenny
-//     PluginTSTypesJenny
+//     PluginTsTypesJenny
 //
 // Run 'make gen-cue' from repository root to regenerate.
 
@@ -15,6 +15,10 @@ export interface Options extends ui.OptionsWithLegend, ui.OptionsWithTooltip, ui
    * Controls the column width
    */
   colWidth?: number;
+  /**
+   * Enables pagination when > 0
+   */
+  perPage?: number;
   /**
    * Set the height of the rows
    */
@@ -27,11 +31,12 @@ export interface Options extends ui.OptionsWithLegend, ui.OptionsWithTooltip, ui
 
 export const defaultOptions: Partial<Options> = {
   colWidth: 0.9,
+  perPage: 20,
   rowHeight: 0.9,
   showValue: ui.VisibilityMode.Auto,
 };
 
-export interface FieldConfig extends ui.HideableFieldConfig {
+export interface FieldConfig extends ui.AxisConfig, ui.HideableFieldConfig {
   fillOpacity?: number;
   lineWidth?: number;
 }

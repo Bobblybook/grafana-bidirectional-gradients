@@ -19,11 +19,32 @@ First, make sure the Docker daemon is running on your machine. Then, follow thes
 
 If you have the grafana/website repo checked out in the same directory as the grafana repo, then you can run `make docs-local-static` to use local assets (such as images).
 
+## Deploy preview
+
+When you open a PR that changes files in the `docs/sources/` directory, CI builds a deploy preview.
+After the deploy preview has been built, the **Deploy pr preview** workflow comments a link to the preview URL and adds a commit status check .
+
 ---
 
 ## Content guidelines
 
-Edit content in the `sources` directory.
+Generally, one can edit content in the `sources` directory.
+
+The following paths are built instead from a typescript file and are auto-generated. Please do not edit these files directly.
+Instead, navigate to the appropriate typescript source file and edit the content there, then follow the build instructions to generate the markdown files.
+
+### Transformations
+
+Auto-generated markdown location:
+
+- docs/sources/panels-visualizations/query-transform-data/transform-data/index.md
+
+Typescript location for editing and instructions:
+
+- scripts/docs/generate-transformations.ts - Includes all content not specific to a transformation.
+- public/app/features/transformers/docs/content.ts - Transformation-specific content.
+
+Only use [reference style links](https://grafana.com/docs/writers-toolkit/write/shortcodes/#docsreference) in the `content.ts` file or else link text will be visible in the UI.
 
 ### [Contributing](/contribute/documentation/README.md)
 

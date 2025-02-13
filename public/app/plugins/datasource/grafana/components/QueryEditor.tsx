@@ -1,22 +1,22 @@
 import { css } from '@emotion/css';
 import pluralize from 'pluralize';
-import React, { PureComponent } from 'react';
+import { PureComponent } from 'react';
+import * as React from 'react';
 import { DropEvent, FileRejection } from 'react-dropzone';
 
 import {
   QueryEditorProps,
   SelectableValue,
-  dataFrameFromJSON,
   rangeUtil,
   DataQueryRequest,
-  DataFrame,
   DataFrameJSON,
   dataFrameToJSON,
   GrafanaTheme2,
   getValueFormat,
   formattedValueToString,
+  Field,
 } from '@grafana/data';
-import { config, getBackendSrv, getDataSourceSrv, reportInteraction } from '@grafana/runtime';
+import { config, getDataSourceSrv, reportInteraction } from '@grafana/runtime';
 import {
   InlineField,
   Select,
@@ -29,10 +29,12 @@ import {
   DropzoneFile,
   Themeable2,
   withTheme2,
+  Stack,
 } from '@grafana/ui';
 import { hasAlphaPanels } from 'app/core/config';
 import * as DFImport from 'app/features/dataframe-import';
-import { SearchQuery } from 'app/features/search/service';
+import { getManagedChannelInfo } from 'app/features/live/info';
+import { SearchQuery } from 'app/features/search/service/types';
 
 import { GrafanaDatasource } from '../datasource';
 import { defaultQuery, GrafanaQuery, GrafanaQueryType } from '../types';
@@ -80,6 +82,13 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
         description: 'Search for grafana resources',
       });
     }
+    if (config.featureToggles.unifiedStorageSearch) {
+      this.queryTypes.push({
+        label: 'Search (experimental)',
+        value: GrafanaQueryType.SearchNext,
+        description: 'Search for grafana resources',
+      });
+    }
     if (config.featureToggles.editPanelCSVDragAndDrop) {
       this.queryTypes.push({
         label: 'Spreadsheet or snapshot',
@@ -90,35 +99,9 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
   }
 
   loadChannelInfo() {
-    getBackendSrv()
-      .fetch({ url: 'api/live/list' })
-      .subscribe({
-        next: (v: any) => {
-          const channelInfo = v.data?.channels as any[];
-          if (channelInfo?.length) {
-            const channelFields: Record<string, Array<SelectableValue<string>>> = {};
-            const channels: Array<SelectableValue<string>> = channelInfo.map((c) => {
-              if (c.data) {
-                const distinctFields = new Set<string>();
-                const frame = dataFrameFromJSON(c.data);
-                for (const f of frame.fields) {
-                  distinctFields.add(f.name);
-                }
-                channelFields[c.channel] = Array.from(distinctFields).map((n) => ({
-                  value: n,
-                  label: n,
-                }));
-              }
-              return {
-                value: c.channel,
-                label: c.channel + ' [' + c.minute_rate + ' msg/min]',
-              };
-            });
-
-            this.setState({ channelFields, channels });
-          }
-        },
-      });
+    getManagedChannelInfo().then((v) => {
+      this.setState(v);
+    });
   }
 
   loadFolderInfo() {
@@ -133,7 +116,7 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
         gds.query(query).subscribe({
           next: (rsp) => {
             if (rsp.data.length) {
-              const names = (rsp.data[0] as DataFrame).fields[0];
+              const names: Field = rsp.data[0].fields[0];
               const folders = names.values.map((v) => ({
                 value: v,
                 label: v,
@@ -241,7 +224,7 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
     }
 
     const distinctFields = new Set<string>();
-    const fields: Array<SelectableValue<string>> = channel ? channelFields[channel] ?? [] : [];
+    const fields: Array<SelectableValue<string>> = channel ? (channelFields[channel] ?? []) : [];
     // if (data && data.series?.length) {
     //   for (const frame of data.series) {
     //     for (const field of frame.fields) {
@@ -277,23 +260,22 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
 
     return (
       <>
-        <div className="gf-form">
-          <InlineField label="Channel" grow={true} labelWidth={labelWidth}>
-            <Select
-              options={channels}
-              value={currentChannel || ''}
-              onChange={this.onChannelChange}
-              allowCustomValue={true}
-              backspaceRemovesValue={true}
-              placeholder="Select measurements channel"
-              isClearable={true}
-              noOptionsMessage="Enter channel name"
-              formatCreateLabel={(input: string) => `Connect to: ${input}`}
-            />
-          </InlineField>
-        </div>
+        <InlineField label="Channel" grow={true} labelWidth={labelWidth}>
+          <Select
+            options={channels}
+            value={currentChannel || ''}
+            onChange={this.onChannelChange}
+            allowCustomValue={true}
+            backspaceRemovesValue={true}
+            placeholder="Select measurements channel"
+            isClearable={true}
+            noOptionsMessage="Enter channel name"
+            formatCreateLabel={(input: string) => `Connect to: ${input}`}
+          />
+        </InlineField>
+
         {channel && (
-          <div className="gf-form">
+          <Stack direction="row" gap={0}>
             <InlineField label="Fields" grow={true} labelWidth={labelWidth}>
               <Select
                 options={fields}
@@ -319,7 +301,7 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
                 spellCheck={false}
               />
             </InlineField>
-          </div>
+          </Stack>
         )}
 
         <Alert title="Grafana Live - Measurements" severity="info">
@@ -457,6 +439,16 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
     onRunQuery();
   };
 
+  onSearchNextChange = (search: SearchQuery) => {
+    const { query, onChange, onRunQuery } = this.props;
+
+    onChange({
+      ...query,
+      searchNext: search,
+    });
+    onRunQuery();
+  };
+
   render() {
     const query = {
       ...defaultQuery,
@@ -500,6 +492,9 @@ export class UnthemedQueryEditor extends PureComponent<Props, State> {
         {queryType === GrafanaQueryType.Search && (
           <SearchEditor value={query.search ?? {}} onChange={this.onSearchChange} />
         )}
+        {queryType === GrafanaQueryType.SearchNext && (
+          <SearchEditor value={query.searchNext ?? {}} onChange={this.onSearchNextChange} />
+        )}
       </>
     );
   }
@@ -509,16 +504,16 @@ export const QueryEditor = withTheme2(UnthemedQueryEditor);
 
 function getStyles(theme: GrafanaTheme2) {
   return {
-    file: css`
-      width: 100%;
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
-      padding: ${theme.spacing(2)};
-      border: 1px dashed ${theme.colors.border.medium};
-      background-color: ${theme.colors.background.secondary};
-      margin-top: ${theme.spacing(1)};
-    `,
+    file: css({
+      width: '100%',
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: theme.spacing(2),
+      border: `1px dashed ${theme.colors.border.medium}`,
+      backgroundColor: theme.colors.background.secondary,
+      marginTop: theme.spacing(1),
+    }),
   };
 }

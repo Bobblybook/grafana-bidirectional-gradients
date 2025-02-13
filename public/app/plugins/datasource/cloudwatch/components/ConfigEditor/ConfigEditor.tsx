@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { css } from '@emotion/css';
+import { useEffect, useState } from 'react';
 import { useDebounce } from 'react-use';
 
 import { ConnectionConfig } from '@grafana/aws-sdk';
@@ -9,36 +10,41 @@ import {
   updateDatasourcePluginJsonDataOption,
   DataSourceTestSucceeded,
   DataSourceTestFailed,
+  GrafanaTheme2,
 } from '@grafana/data';
-import { getAppEvents, usePluginInteractionReporter } from '@grafana/runtime';
-import { Input, InlineField, FieldProps, SecureSocksProxySettings } from '@grafana/ui';
-import { notifyApp } from 'app/core/actions';
-import { config } from 'app/core/config';
-import { createWarningNotification } from 'app/core/copy/appNotification';
-import { getDatasourceSrv } from 'app/features/plugins/datasource_srv';
-import { store } from 'app/store/store';
+import { ConfigSection } from '@grafana/plugin-ui';
+import { getAppEvents, usePluginInteractionReporter, getDataSourceSrv, config } from '@grafana/runtime';
+import { Alert, Input, FieldProps, Field, Divider, useStyles2 } from '@grafana/ui';
 
 import { CloudWatchDatasource } from '../../datasource';
 import { SelectableResourceValue } from '../../resources/types';
 import { CloudWatchJsonData, CloudWatchSecureJsonData } from '../../types';
 import { LogGroupsFieldWrapper } from '../shared/LogGroups/LogGroupsField';
 
+import { SecureSocksProxySettingsNewStyling } from './SecureSocksProxySettingsNewStyling';
 import { XrayLinkConfig } from './XrayLinkConfig';
 
 export type Props = DataSourcePluginOptionsEditorProps<CloudWatchJsonData, CloudWatchSecureJsonData>;
 
 type LogGroupFieldState = Pick<FieldProps, 'invalid'> & { error?: string | null };
 
+export const ARN_DEPRECATION_WARNING_MESSAGE =
+  'Since grafana 7.3 authentication type "arn" is deprecated, falling back to default SDK provider';
+export const CREDENTIALS_AUTHENTICATION_WARNING_MESSAGE =
+  'As of grafana 7.3 authentication type "credentials" should be used only for shared file credentials. \
+If you don\'t have a credentials file, switch to the default SDK provider for extracting credentials \
+from environment variables or IAM roles';
+
 export const ConfigEditor = (props: Props) => {
   const { options, onOptionsChange } = props;
   const { defaultLogGroups, logsTimeout, defaultRegion, logGroups } = options.jsonData;
   const datasource = useDatasource(props);
-  useAuthenticationWarning(options.jsonData);
   const logsTimeoutError = useTimoutValidation(logsTimeout);
   const saved = useDataSourceSavedState(props);
   const [logGroupFieldState, setLogGroupFieldState] = useState<LogGroupFieldState>({
     invalid: false,
   });
+
   useEffect(() => setLogGroupFieldState({ invalid: false }), [props.options]);
   const report = usePluginInteractionReporter();
   useEffect(() => {
@@ -67,11 +73,29 @@ export const ConfigEditor = (props: Props) => {
     }
   }, [datasource, externalId]);
 
+  const [warning, setWarning] = useState<string | null>(null);
+  const dismissWarning = () => {
+    setWarning(null);
+  };
+  useEffect(() => {
+    if (options.jsonData.authType === 'arn') {
+      setWarning(ARN_DEPRECATION_WARNING_MESSAGE);
+    } else if (options.jsonData.authType === 'credentials' && !options.jsonData.profile && !options.jsonData.database) {
+      setWarning(CREDENTIALS_AUTHENTICATION_WARNING_MESSAGE);
+    }
+  }, [options.jsonData.authType, options.jsonData.database, options.jsonData.profile]);
+
+  const styles = useStyles2(getStyles);
+
   return (
-    <>
+    <div className={styles.formStyles}>
+      {warning && (
+        <Alert title="CloudWatch Authentication" severity="warning" onRemove={dismissWarning}>
+          {warning}
+        </Alert>
+      )}
       <ConnectionConfig
         {...props}
-        labelWidth={29}
         loadRegions={
           datasource &&
           (async () => {
@@ -87,41 +111,37 @@ export const ConfigEditor = (props: Props) => {
         }
         externalId={externalId}
       >
-        <InlineField label="Namespaces of Custom Metrics" labelWidth={29} tooltip="Namespaces of Custom Metrics.">
+        <Field label="Namespaces of Custom Metrics">
           <Input
-            width={60}
             placeholder="Namespace1,Namespace2"
             value={options.jsonData.customMetricsNamespaces || ''}
             onChange={onUpdateDatasourceJsonDataOption(props, 'customMetricsNamespaces')}
           />
-        </InlineField>
+        </Field>
       </ConnectionConfig>
-
       {config.secureSocksDSProxyEnabled && (
-        <SecureSocksProxySettings options={options} onOptionsChange={onOptionsChange} />
+        <SecureSocksProxySettingsNewStyling options={options} onOptionsChange={onOptionsChange} />
       )}
-
-      <h3 className="page-heading">CloudWatch Logs</h3>
-      <div className="gf-form-group">
-        <InlineField
+      <Divider />
+      <ConfigSection title="Cloudwatch Logs">
+        <Field
+          htmlFor="logsTimeout"
           label="Query Result Timeout"
-          labelWidth={28}
-          tooltip='Grafana will poll for Cloudwatch Logs query results every second until Done status is returned from AWS or timeout is exceeded, in which case Grafana will return an error. The default period is 30 minutes. Note: For Alerting, the timeout defined in the config file will take precedence. Must be a valid duration string, such as "15m" "30s" "2000ms" etc.'
+          description='Grafana will poll for Cloudwatch Logs results every second until Done status is returned from AWS or timeout is exceeded, in which case Grafana will return an error. Note: For Alerting, the timeout from Grafana config file will take precedence. Must be a valid duration string, such as "30m" (default) "30s" "2000ms" etc.'
           invalid={Boolean(logsTimeoutError)}
         >
           <Input
+            id="logsTimeout"
             width={60}
             placeholder="30m"
             value={options.jsonData.logsTimeout || ''}
             onChange={onUpdateDatasourceJsonDataOption(props, 'logsTimeout')}
             title={'The timeout must be a valid duration string, such as "15m" "30s" "2000ms" etc.'}
           />
-        </InlineField>
-        <InlineField
+        </Field>
+        <Field
           label="Default Log Groups"
-          labelWidth={28}
-          tooltip="Optionally, specify default log groups for CloudWatch Logs queries."
-          shrink={true}
+          description="Optionally, specify default log groups for CloudWatch Logs queries."
           {...logGroupFieldState}
         >
           {datasource ? (
@@ -165,41 +185,25 @@ export const ConfigEditor = (props: Props) => {
           ) : (
             <></>
           )}
-        </InlineField>
-      </div>
+        </Field>
+      </ConfigSection>
+      <Divider />
       <XrayLinkConfig
+        newFormStyling={true}
         onChange={(uid) => updateDatasourcePluginJsonDataOption(props, 'tracingDatasourceUid', uid)}
         datasourceUid={options.jsonData.tracingDatasourceUid}
       />
-    </>
+    </div>
   );
 };
-
-function useAuthenticationWarning(jsonData: CloudWatchJsonData) {
-  const addWarning = (message: string) => {
-    store.dispatch(notifyApp(createWarningNotification('CloudWatch Authentication', message)));
-  };
-
-  useEffect(() => {
-    if (jsonData.authType === 'arn') {
-      addWarning('Since grafana 7.3 authentication type "arn" is deprecated, falling back to default SDK provider');
-    } else if (jsonData.authType === 'credentials' && !jsonData.profile && !jsonData.database) {
-      addWarning(
-        'As of grafana 7.3 authentication type "credentials" should be used only for shared file credentials. \
-             If you don\'t have a credentials file, switch to the default SDK provider for extracting credentials \
-             from environment variables or IAM roles'
-      );
-    }
-  }, [jsonData.authType, jsonData.database, jsonData.profile]);
-}
 
 function useDatasource(props: Props) {
   const [datasource, setDatasource] = useState<CloudWatchDatasource>();
 
   useEffect(() => {
     if (props.options.version) {
-      getDatasourceSrv()
-        .loadDatasource(props.options.name)
+      getDataSourceSrv()
+        .get(props.options.name)
         .then((datasource) => {
           if (datasource instanceof CloudWatchDatasource) {
             setDatasource(datasource);
@@ -255,3 +259,9 @@ function useDataSourceSavedState(props: Props) {
 
   return saved;
 }
+
+const getStyles = (theme: GrafanaTheme2) => ({
+  formStyles: css({
+    maxWidth: theme.spacing(50),
+  }),
+});

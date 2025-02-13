@@ -1,11 +1,11 @@
 import { css } from '@emotion/css';
 import { dump, load } from 'js-yaml';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useFormContext } from 'react-hook-form';
 import AutoSizer from 'react-virtualized-auto-sizer';
 
 import { GrafanaTheme2 } from '@grafana/data';
-import { Button, CodeEditor, Drawer, Icon, Tab, TabsBar, useStyles2, Tooltip } from '@grafana/ui';
+import { Button, CodeEditor, Drawer, Icon, Tab, TabsBar, Tooltip, useStyles2 } from '@grafana/ui';
 
 import { RulerRuleDTO } from '../../../../../types/unified-alerting-dto';
 import { RuleFormValues } from '../../types/rule-form';
@@ -155,26 +155,26 @@ function rulerRuleToRuleFormValues(rulerRule: RulerRuleDTO): Partial<RuleFormVal
 }
 
 export const yamlTabStyle = (theme: GrafanaTheme2) => ({
-  content: css`
-    flex-grow: 1;
-    height: 100%;
-    padding-bottom: 16px;
-    margin-bottom: ${theme.spacing(2)};
-  `,
-  applyButton: css`
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
-    flex-grow: 0;
-    margin-bottom: ${theme.spacing(2)};
-  `,
+  content: css({
+    flexGrow: 1,
+    height: '100%',
+    paddingBottom: '16px',
+    marginBottom: theme.spacing(2),
+  }),
+  applyButton: css({
+    display: 'flex',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexGrow: 0,
+    marginBottom: theme.spacing(2),
+  }),
 });
 
 export const drawerStyles = () => ({
-  subtitle: css`
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  `,
+  subtitle: css({
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  }),
 });

@@ -60,6 +60,7 @@ export function createTableFrameFromMetricsSummaryQuery(
         name: `${series.key}`,
         type: FieldType.string,
         config: getConfig(series, configQuery, instanceSettings),
+        values: [],
       };
     });
   });
@@ -69,11 +70,6 @@ export function createTableFrameFromMetricsSummaryQuery(
     refId: 'metrics-summary',
     fields: [
       ...Object.values(dynamicMetrics).sort((a, b) => a.name.localeCompare(b.name)),
-      {
-        name: 'kind',
-        type: FieldType.string,
-        config: { displayNameFromDS: 'Kind', custom: { width: 150 } },
-      },
       {
         name: 'spanCount',
         type: FieldType.number,
@@ -112,7 +108,6 @@ export const transformToMetricsData = (data: MetricsSummary) => {
     : '0%';
 
   const metricsData: MetricsData = {
-    kind: 'server', // so the user knows all results are of kind = server
     spanCount: getNumberForMetric(data.spanCount),
     errorPercentage,
     p50: getNumberForMetric(data.p50),
@@ -144,12 +139,12 @@ export const getConfigQuery = (series: Series[], targetQuery: string) => {
     configQuery = targetQuery.substring(0, closingBracketIndex);
     if (queryParts.length > 0) {
       configQuery += targetQuery.replace(/\s/g, '').includes('{}') ? '' : ' && ';
-      configQuery += `${queryParts.join(' && ')} && kind=server`;
+      configQuery += `${queryParts.join(' && ')}`;
       configQuery += `}`;
     }
     configQuery += `${queryAfterClosingBracket}`;
   } else {
-    configQuery = `{${queryParts.join(' && ')} && kind=server} | ${targetQuery}`;
+    configQuery = `{${queryParts.join(' && ')}} | ${targetQuery}`;
   }
 
   return configQuery;

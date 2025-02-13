@@ -21,9 +21,12 @@ const (
 
 func TestGetPluginArchive(t *testing.T) {
 	tcs := []struct {
-		name string
-		sha  string
-		err  error
+		name     string
+		sha      string
+		apiOpSys string
+		apiArch  string
+		apiUrl   string
+		err      error
 	}{
 		{
 			name: "Happy path",
@@ -32,7 +35,19 @@ func TestGetPluginArchive(t *testing.T) {
 		{
 			name: "Incorrect SHA returns error",
 			sha:  "1a2b3c",
-			err:  &ErrChecksumMismatch{},
+			err:  ErrChecksumMismatchBase,
+		},
+		{
+			name:     "Core plugin",
+			sha:      "69f698961b6ea651211a187874434821c4727cc22de022e3a7059116d21c75b1",
+			apiOpSys: "any",
+			apiUrl:   "https://github.com/grafana/grafana/tree/main/public/app/plugins/test",
+			err:      ErrCorePluginBase,
+		},
+		{
+			name:   "Decoupled core plugin",
+			sha:    "69f698961b6ea651211a187874434821c4727cc22de022e3a7059116d21c75b1",
+			apiUrl: "https://github.com/grafana/grafana/tree/main/public/app/plugins/test",
 		},
 	}
 
@@ -57,17 +72,23 @@ func TestGetPluginArchive(t *testing.T) {
 				grafanaVersion = "10.0.0"
 			)
 
-			srv := mockPluginRepoAPI(t,
-				srvData{
-					pluginID:       pluginID,
-					version:        version,
-					opSys:          opSys,
-					arch:           arch,
-					grafanaVersion: grafanaVersion,
-					sha:            tc.sha,
-					archive:        d,
-				},
-			)
+			srvd := srvData{
+				pluginID:       pluginID,
+				version:        version,
+				opSys:          tc.apiOpSys,
+				arch:           tc.apiArch,
+				url:            tc.apiUrl,
+				grafanaVersion: grafanaVersion,
+				sha:            tc.sha,
+				archive:        d,
+			}
+			if srvd.opSys == "" {
+				srvd.opSys = opSys
+			}
+			if srvd.arch == "" && srvd.opSys != "any" {
+				srvd.arch = arch
+			}
+			srv := mockPluginVersionsAPI(t, srvd)
 			t.Cleanup(srv.Close)
 
 			m := NewManager(ManagerCfg{
@@ -78,13 +99,38 @@ func TestGetPluginArchive(t *testing.T) {
 			co := NewCompatOpts(grafanaVersion, opSys, arch)
 			archive, err := m.GetPluginArchive(context.Background(), pluginID, version, co)
 			if tc.err != nil {
-				require.ErrorAs(t, err, tc.err)
+				require.ErrorIs(t, err, tc.err)
 				return
 			}
 			require.NoError(t, err)
 			verifyArchive(t, archive)
 		})
 	}
+}
+
+func TestPluginInfo(t *testing.T) {
+	const (
+		pluginID = "grafana-test-datasource"
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, fmt.Sprintf("/%s", pluginID), r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{ "id": 1, "slug": "%s", "status": "active" }`, pluginID)))
+	}))
+	t.Cleanup(srv.Close)
+
+	m := NewManager(ManagerCfg{
+		SkipTLSVerify: false,
+		BaseURL:       srv.URL,
+		Logger:        log.NewTestPrettyLogger(),
+	})
+	pi, err := m.PluginInfo(context.Background(), pluginID)
+	require.NoError(t, err)
+	require.Equal(t, 1, pi.ID)
+	require.Equal(t, pluginID, pi.Slug)
+	require.Equal(t, "active", pi.Status)
 }
 
 func verifyArchive(t *testing.T, archive *PluginArchive) {
@@ -125,34 +171,39 @@ type srvData struct {
 	sha            string
 	grafanaVersion string
 	archive        []byte
+	url            string
 }
 
-func mockPluginRepoAPI(t *testing.T, data srvData) *httptest.Server {
+func mockPluginVersionsAPI(t *testing.T, data srvData) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
 	// mock plugin version data
-	mux.HandleFunc(fmt.Sprintf("/repo/%s", data.pluginID), func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(fmt.Sprintf("/%s/versions", data.pluginID), func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, data.grafanaVersion, r.Header.Get("grafana-version"))
-		require.Equal(t, data.opSys, r.Header.Get("grafana-os"))
-		require.Equal(t, data.arch, r.Header.Get("grafana-arch"))
 		require.NotNil(t, fmt.Sprintf("grafana %s", data.grafanaVersion), r.Header.Get("User-Agent"))
 
 		w.WriteHeader(http.StatusOK)
 		w.Header().Set("Content-Type", "application/json")
 
+		platform := data.opSys
+		if data.arch != "" {
+			platform += "-" + data.arch
+		}
 		_, _ = w.Write([]byte(fmt.Sprintf(`
 				{
-					"versions": [{
+					"items": [{
 						"version": "%s",
-						"arch": {
-							"%s-%s": {
+						"packages": {
+							"%s": {
 								"sha256": "%s"
 							}
-						}
+						},
+						"url": "%s",
+						"isCompatible": true
 					}]
 				}
-			`, data.version, data.opSys, data.arch, data.sha),
+			`, data.version, platform, data.sha, data.url),
 		))
 	})
 
@@ -167,16 +218,17 @@ func mockPluginRepoAPI(t *testing.T, data srvData) *httptest.Server {
 }
 
 type versionArg struct {
-	version string
-	arch    []string
+	version      string
+	arch         []string
+	isCompatible *bool
 }
 
 func createPluginVersions(versions ...versionArg) []Version {
-	var vs []Version
-
-	for _, version := range versions {
+	vs := make([]Version, len(versions))
+	for i, version := range versions {
 		ver := Version{
-			Version: version.version,
+			Version:      version.version,
+			IsCompatible: version.isCompatible,
 		}
 		if version.arch != nil {
 			ver.Arch = map[string]ArchMeta{}
@@ -186,7 +238,8 @@ func createPluginVersions(versions ...versionArg) []Version {
 				}
 			}
 		}
-		vs = append(vs, ver)
+
+		vs[i] = ver
 	}
 
 	return vs

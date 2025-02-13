@@ -4,7 +4,7 @@
 //     public/app/plugins/gen.go
 // Using jennies:
 //     TSTypesJenny
-//     PluginTSTypesJenny
+//     PluginTsTypesJenny
 //
 // Run 'make gen-cue' from repository root to regenerate.
 
@@ -17,6 +17,11 @@ export interface ArcOption {
    * Field from which to get the value. Values should be less than 1, representing fraction of a circle.
    */
   field?: string;
+}
+
+export enum ZoomMode {
+  Cooperative = 'cooperative',
+  Greedy = 'greedy',
 }
 
 export interface Options {
@@ -44,4 +49,8 @@ export interface Options {
      */
     arcs?: Array<ArcOption>;
   };
+  /**
+   * How to handle zoom/scroll events in the node graph
+   */
+  zoomMode?: ZoomMode;
 }

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React, { ComponentProps } from 'react';
+import { ComponentProps } from 'react';
 import tinycolor from 'tinycolor2';
 
 import { CoreApp, createTheme, LogLevel, LogRowModel } from '@grafana/data';
@@ -30,6 +30,7 @@ const setup = (propOverrides?: Partial<ComponentProps<typeof LogRow>>, rowOverri
     enableLogDetails: false,
     getRows: () => [],
     onOpenContext: () => {},
+    handleTextSelection: jest.fn(),
     prettifyLogMessage: false,
     app: CoreApp.Explore,
     showDuplicates: false,
@@ -61,7 +62,7 @@ describe('LogRow', () => {
   describe('with permalinking', () => {
     it('reports via feature tracking when log line matches', () => {
       const scrollIntoView = jest.fn();
-      setup({ permalinkedRowId: 'log-row-id', scrollIntoView, containerRendered: true });
+      setup({ permalinkedRowId: 'log-row-id', scrollIntoView });
       expect(reportInteraction).toHaveBeenCalledWith('grafana_explore_logs_permalink_opened', {
         logRowUid: 'log-row-id',
         datasourceType: 'unknown',
@@ -72,7 +73,6 @@ describe('LogRow', () => {
     it('highlights row with same permalink-id', () => {
       const { container } = setup({
         permalinkedRowId: 'log-row-id',
-        containerRendered: true,
         scrollIntoView: jest.fn(),
       });
       const row = container.querySelector('tr');
@@ -85,7 +85,6 @@ describe('LogRow', () => {
       const { container } = setup({
         permalinkedRowId: 'log-row-id',
         enableLogDetails: true,
-        containerRendered: true,
         scrollIntoView: jest.fn(),
       });
       const row = container.querySelector('tr');
@@ -110,27 +109,21 @@ describe('LogRow', () => {
 
     it('calls `scrollIntoView` if permalink matches', () => {
       const scrollIntoView = jest.fn();
-      setup({ permalinkedRowId: 'log-row-id', scrollIntoView, containerRendered: true });
+      setup({ permalinkedRowId: 'log-row-id', scrollIntoView });
       expect(scrollIntoView).toHaveBeenCalled();
     });
 
     it('does not call `scrollIntoView` if permalink does not match', () => {
       const scrollIntoView = jest.fn();
-      setup({ permalinkedRowId: 'wrong-log-row-id', scrollIntoView, containerRendered: true });
+      setup({ permalinkedRowId: 'wrong-log-row-id', scrollIntoView });
       expect(scrollIntoView).not.toHaveBeenCalled();
     });
 
     it('calls `scrollIntoView` once', async () => {
       const scrollIntoView = jest.fn();
-      setup({ permalinkedRowId: 'log-row-id', scrollIntoView, containerRendered: true });
+      setup({ permalinkedRowId: 'log-row-id', scrollIntoView });
       await userEvent.hover(screen.getByText('test123'));
       expect(scrollIntoView).toHaveBeenCalledTimes(1);
-    });
-
-    it('does not call `scrollIntoView` if permalink matches but container is not rendered yet', () => {
-      const scrollIntoView = jest.fn();
-      setup({ permalinkedRowId: 'log-row-id', scrollIntoView, containerRendered: false });
-      expect(scrollIntoView).not.toHaveBeenCalled();
     });
   });
 

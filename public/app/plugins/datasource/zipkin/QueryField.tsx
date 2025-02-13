@@ -1,10 +1,11 @@
 import { css } from '@emotion/css';
 import { fromPairs } from 'lodash';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAsyncFn, useMount, useMountedState } from 'react-use';
 import { AsyncState } from 'react-use/lib/useAsyncFn';
 
 import { GrafanaTheme2, QueryEditorProps } from '@grafana/data';
+import { TemporaryAlert } from '@grafana/o11y-ds-frontend';
 import {
   ButtonCascader,
   CascaderOption,
@@ -19,11 +20,7 @@ import {
   HorizontalGroup,
   Button,
 } from '@grafana/ui';
-import { notifyApp } from 'app/core/actions';
-import { createErrorNotification } from 'app/core/copy/appNotification';
-import { dispatch } from 'app/store/store';
 
-import { apiPrefix } from './constants';
 import { ZipkinDatasource } from './datasource';
 import { ZipkinQuery, ZipkinQueryType, ZipkinSpan } from './types';
 
@@ -40,10 +37,11 @@ const getStyles = (theme: GrafanaTheme2) => {
 
 export const ZipkinQueryField = ({ query, onChange, onRunQuery, datasource }: Props) => {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
-  const serviceOptions = useServices(datasource);
+  const [alertText, setAlertText] = useState('');
+  const serviceOptions = useServices(datasource, setAlertText);
   const theme = useTheme2();
   const styles = useStyles2(getStyles);
-  const { onLoadOptions, allOptions } = useLoadOptions(datasource);
+  const { onLoadOptions, allOptions } = useLoadOptions(datasource, setAlertText);
 
   const onSelectTrace = useCallback(
     (values: string[], selectedOptions: CascaderOption[]) => {
@@ -138,17 +136,19 @@ export const ZipkinQueryField = ({ query, onChange, onRunQuery, datasource }: Pr
           </div>
         </InlineFieldRow>
       )}
+      {alertText && <TemporaryAlert text={alertText} severity={'error'} />}
     </>
   );
 };
 
 // Exported for tests
-export function useServices(datasource: ZipkinDatasource): AsyncState<CascaderOption[]> {
-  const url = `${apiPrefix}/services`;
-
+export function useServices(
+  datasource: ZipkinDatasource,
+  setErrorText: (text: string) => void
+): AsyncState<CascaderOption[]> {
   const [servicesOptions, fetch] = useAsyncFn(async (): Promise<CascaderOption[]> => {
     try {
-      const services: string[] | null = await datasource.metadataRequest(url);
+      const services: string[] | null = await datasource.metadataRequest('services');
       if (services) {
         return services.sort().map((service) => ({
           label: service,
@@ -159,7 +159,8 @@ export function useServices(datasource: ZipkinDatasource): AsyncState<CascaderOp
       return [];
     } catch (error) {
       const errorToShow = error instanceof Error ? error : 'An unknown error occurred';
-      dispatch(notifyApp(createErrorNotification('Failed to load services from Zipkin', errorToShow)));
+      const errorText = `Failed to load spans from Zipkin: ${errorToShow.toString()}`;
+      setErrorText(errorText);
       throw error;
     }
   }, [datasource]);
@@ -181,18 +182,17 @@ type OptionsState = {
 };
 
 // Exported for tests
-export function useLoadOptions(datasource: ZipkinDatasource) {
+export function useLoadOptions(datasource: ZipkinDatasource, setErrorText: (text: string) => void) {
   const isMounted = useMountedState();
-  const [allOptions, setAllOptions] = useState({} as OptionsState);
+  const [allOptions, setAllOptions] = useState<OptionsState>({});
 
   const [, fetchSpans] = useAsyncFn(
     async function findSpans(service: string): Promise<void> {
-      const url = `${apiPrefix}/spans`;
       try {
         // The response of this should have been full ZipkinSpan objects based on API docs but is just list
         // of span names.
         // TODO: check if this is some issue of version used or something else
-        const response: string[] = await datasource.metadataRequest(url, { serviceName: service });
+        const response: string[] = await datasource.metadataRequest('spans', { serviceName: service });
         if (isMounted()) {
           setAllOptions((state) => {
             const spanOptions = fromPairs(response.map((span: string) => [span, undefined]));
@@ -204,7 +204,8 @@ export function useLoadOptions(datasource: ZipkinDatasource) {
         }
       } catch (error) {
         const errorToShow = error instanceof Error ? error : 'An unknown error occurred';
-        dispatch(notifyApp(createErrorNotification('Failed to load spans from Zipkin', errorToShow)));
+        const errorText = `Failed to load spans from Zipkin: ${errorToShow.toString()}`;
+        setErrorText(errorText);
         throw error;
       }
     },
@@ -213,7 +214,6 @@ export function useLoadOptions(datasource: ZipkinDatasource) {
 
   const [, fetchTraces] = useAsyncFn(
     async function findTraces(serviceName: string, spanName: string): Promise<void> {
-      const url = `${apiPrefix}/traces`;
       const search = {
         serviceName,
         spanName,
@@ -221,7 +221,7 @@ export function useLoadOptions(datasource: ZipkinDatasource) {
       };
       try {
         // This should return just root traces as there isn't any nesting
-        const traces: ZipkinSpan[][] = await datasource.metadataRequest(url, search);
+        const traces: ZipkinSpan[][] = await datasource.metadataRequest('traces', search);
         if (isMounted()) {
           const newTraces = traces.length
             ? fromPairs(
@@ -246,7 +246,8 @@ export function useLoadOptions(datasource: ZipkinDatasource) {
         }
       } catch (error) {
         const errorToShow = error instanceof Error ? error : 'An unknown error occurred';
-        dispatch(notifyApp(createErrorNotification('Failed to load spans from Zipkin', errorToShow)));
+        const errorText = `Failed to load spans from Zipkin: ${errorToShow.toString()}`;
+        setErrorText(errorText);
         throw error;
       }
     },

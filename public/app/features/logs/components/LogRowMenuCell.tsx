@@ -1,48 +1,98 @@
-import React, { FocusEvent, SyntheticEvent, useCallback } from 'react';
+import {
+  memo,
+  FocusEvent,
+  SyntheticEvent,
+  useCallback,
+  ReactNode,
+  useMemo,
+  cloneElement,
+  isValidElement,
+  MouseEvent,
+} from 'react';
 
-import { LogRowModel } from '@grafana/data';
-import { ClipboardButton, IconButton } from '@grafana/ui';
+import { LogRowContextOptions, LogRowModel, getDefaultTimeRange, locationUtil, urlUtil } from '@grafana/data';
+import { DataQuery } from '@grafana/schema';
+import { ClipboardButton, IconButton, PopoverContent } from '@grafana/ui';
+import { getConfig } from 'app/core/config';
 
 import { LogRowStyles } from './getLogRowStyles';
 
 interface Props {
   logText: string;
   row: LogRowModel;
-  showContextToggle?: (row?: LogRowModel) => boolean;
+  showContextToggle?: (row: LogRowModel) => boolean;
   onOpenContext: (row: LogRowModel) => void;
+  getRowContextQuery?: (
+    row: LogRowModel,
+    options?: LogRowContextOptions,
+    cacheFilters?: boolean
+  ) => Promise<DataQuery | null>;
   onPermalinkClick?: (row: LogRowModel) => Promise<void>;
   onPinLine?: (row: LogRowModel) => void;
   onUnpinLine?: (row: LogRowModel) => void;
+  pinLineButtonTooltipTitle?: PopoverContent;
   pinned?: boolean;
   styles: LogRowStyles;
   mouseIsOver: boolean;
   onBlur: () => void;
+  onPinToContentOutlineClick?: (row: LogRowModel, onOpenContext: (row: LogRowModel) => void) => void;
+  addonBefore?: ReactNode[];
+  addonAfter?: ReactNode[];
 }
 
-export const LogRowMenuCell = React.memo(
+export const LogRowMenuCell = memo(
   ({
     logText,
     onOpenContext,
     onPermalinkClick,
     onPinLine,
     onUnpinLine,
+    pinLineButtonTooltipTitle,
     pinned,
     row,
     showContextToggle,
     styles,
     mouseIsOver,
     onBlur,
+    getRowContextQuery,
+    addonBefore,
+    addonAfter,
   }: Props) => {
-    const shouldShowContextToggle = showContextToggle ? showContextToggle(row) : false;
+    const shouldShowContextToggle = useMemo(
+      () => (showContextToggle ? showContextToggle(row) : false),
+      [row, showContextToggle]
+    );
     const onLogRowClick = useCallback((e: SyntheticEvent) => {
       e.stopPropagation();
     }, []);
     const onShowContextClick = useCallback(
-      (e: SyntheticEvent<HTMLElement, Event>) => {
-        e.stopPropagation();
+      async (event: MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        // if ctrl or meta key is pressed, open query in new Explore tab
+        if (
+          getRowContextQuery &&
+          (event.nativeEvent.ctrlKey || event.nativeEvent.metaKey || event.nativeEvent.shiftKey)
+        ) {
+          const win = window.open('about:blank');
+          // for this request we don't want to use the cached filters from a context provider, but always want to refetch and clear
+          const query = await getRowContextQuery(row, undefined, false);
+          if (query && win) {
+            const url = urlUtil.renderUrl(locationUtil.assureBaseUrl(`${getConfig().appSubUrl}explore`), {
+              left: JSON.stringify({
+                datasource: query.datasource,
+                queries: [query],
+                range: getDefaultTimeRange(),
+              }),
+            });
+            win.location = url;
+
+            return;
+          }
+          win?.close();
+        }
         onOpenContext(row);
       },
-      [onOpenContext, row]
+      [onOpenContext, getRowContextQuery, row]
     );
     /**
      * For better accessibility support, we listen to the onBlur event here (to hide this component), and
@@ -57,6 +107,21 @@ export const LogRowMenuCell = React.memo(
       [onBlur]
     );
     const getLogText = useCallback(() => logText, [logText]);
+
+    const beforeContent = useMemo(() => {
+      if (!addonBefore) {
+        return null;
+      }
+      return addClickListenersToNode(addonBefore, row);
+    }, [addonBefore, row]);
+
+    const afterContent = useMemo(() => {
+      if (!addonAfter) {
+        return null;
+      }
+      return addClickListenersToNode(addonAfter, row);
+    }, [addonAfter, row]);
+
     return (
       // We keep this click listener here to prevent the row from being selected when clicking on the menu.
       // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
@@ -75,6 +140,7 @@ export const LogRowMenuCell = React.memo(
         )}
         {mouseIsOver && (
           <>
+            {beforeContent}
             {shouldShowContextToggle && (
               <IconButton
                 size="md"
@@ -115,7 +181,7 @@ export const LogRowMenuCell = React.memo(
                 size="md"
                 name="gf-pin"
                 onClick={() => onPinLine && onPinLine(row)}
-                tooltip="Pin line"
+                tooltip={pinLineButtonTooltipTitle ?? 'Pin line'}
                 tooltipPlacement="top"
                 aria-label="Pin line"
                 tabIndex={0}
@@ -132,11 +198,32 @@ export const LogRowMenuCell = React.memo(
                 tabIndex={0}
               />
             )}
+            {afterContent}
           </>
         )}
       </span>
     );
   }
 );
+
+type AddonOnClickListener = (event: MouseEvent, row: LogRowModel) => void | undefined;
+function addClickListenersToNode(nodes: ReactNode[], row: LogRowModel) {
+  return nodes.map((node, index) => {
+    if (isValidElement(node)) {
+      const onClick: AddonOnClickListener = node.props.onClick;
+      if (!onClick) {
+        return node;
+      }
+      return cloneElement(node, {
+        // @ts-expect-error
+        onClick: (event: MouseEvent<HTMLElement>) => {
+          onClick(event, row);
+        },
+        key: index,
+      });
+    }
+    return node;
+  });
+}
 
 LogRowMenuCell.displayName = 'LogRowMenuCell';

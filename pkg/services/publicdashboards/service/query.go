@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/gtime"
 	"github.com/grafana/grafana/pkg/api/dtos"
 	"github.com/grafana/grafana/pkg/components/simplejson"
 	"github.com/grafana/grafana/pkg/expr"
@@ -13,11 +14,11 @@ import (
 	"github.com/grafana/grafana/pkg/services/annotations"
 	"github.com/grafana/grafana/pkg/services/dashboards"
 	"github.com/grafana/grafana/pkg/services/datasources"
+	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/publicdashboards/models"
 	"github.com/grafana/grafana/pkg/services/publicdashboards/validation"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/tsdb/grafanads"
-	"github.com/grafana/grafana/pkg/tsdb/legacydata"
 )
 
 // FindAnnotations returns annotations for a public dashboard
@@ -36,7 +37,7 @@ func (pd *PublicDashboardServiceImpl) FindAnnotations(ctx context.Context, reqDT
 		return nil, models.ErrInternalServerError.Errorf("FindAnnotations: failed to unmarshal dashboard annotations: %w", err)
 	}
 
-	anonymousUser := buildAnonymousUser(ctx, dash)
+	anonymousUser := buildAnonymousUser(ctx, dash, pd.features)
 
 	uniqueEvents := make(map[int64]models.AnnotationEvent, 0)
 	for _, anno := range annoDto.Annotations.List {
@@ -138,7 +139,7 @@ func (pd *PublicDashboardServiceImpl) GetQueryDataResponse(ctx context.Context, 
 		return nil, models.ErrPanelQueriesNotFound.Errorf("GetQueryDataResponse: failed to extract queries from panel")
 	}
 
-	anonymousUser := buildAnonymousUser(ctx, dashboard)
+	anonymousUser := buildAnonymousUser(ctx, dashboard, pd.features)
 	res, err := pd.QueryDataService.QueryData(ctx, anonymousUser, skipDSCache, metricReq)
 
 	reqDatasources := metricReq.GetUniqueDatasourceTypes()
@@ -154,15 +155,15 @@ func (pd *PublicDashboardServiceImpl) GetQueryDataResponse(ctx context.Context, 
 }
 
 // buildMetricRequest merges public dashboard parameters with dashboard and returns a metrics request to be sent to query backend
-func (pd *PublicDashboardServiceImpl) buildMetricRequest(dashboard *dashboards.Dashboard, publicDashboard *models.PublicDashboard, panelId int64, reqDTO models.PublicDashboardQueryDTO) (dtos.MetricRequest, error) {
+func (pd *PublicDashboardServiceImpl) buildMetricRequest(dashboard *dashboards.Dashboard, publicDashboard *models.PublicDashboard, panelID int64, reqDTO models.PublicDashboardQueryDTO) (dtos.MetricRequest, error) {
 	// group queries by panel
 	queriesByPanel := groupQueriesByPanelId(dashboard.Data)
-	queries, ok := queriesByPanel[panelId]
+	queries, ok := queriesByPanel[panelID]
 	if !ok {
 		return dtos.MetricRequest{}, models.ErrPanelNotFound.Errorf("buildMetricRequest: public dashboard panel not found")
 	}
 
-	ts := buildTimeSettings(dashboard, reqDTO, publicDashboard)
+	ts := buildTimeSettings(dashboard, reqDTO, publicDashboard, panelID)
 
 	// determine safe resolution to query data at
 	safeInterval, safeResolution := pd.getSafeIntervalAndMaxDataPoints(reqDTO, ts)
@@ -180,7 +181,7 @@ func (pd *PublicDashboardServiceImpl) buildMetricRequest(dashboard *dashboards.D
 }
 
 // buildAnonymousUser creates a user with permissions to read from all datasources used in the dashboard
-func buildAnonymousUser(ctx context.Context, dashboard *dashboards.Dashboard) *user.SignedInUser {
+func buildAnonymousUser(ctx context.Context, dashboard *dashboards.Dashboard, features featuremgmt.FeatureToggles) *user.SignedInUser {
 	datasourceUids := getUniqueDashboardDatasourceUids(dashboard.Data)
 
 	// Create a user with blank permissions
@@ -204,8 +205,12 @@ func buildAnonymousUser(ctx context.Context, dashboard *dashboards.Dashboard) *u
 	permissions := make(map[string][]string)
 	permissions[datasources.ActionQuery] = queryScopes
 	permissions[datasources.ActionRead] = readScopes
-	permissions[accesscontrol.ActionAnnotationsRead] = annotationScopes
 	permissions[dashboards.ActionDashboardsRead] = dashboardScopes
+	permissions[accesscontrol.ActionAnnotationsRead] = annotationScopes
+
+	if features.IsEnabled(ctx, featuremgmt.FlagAnnotationPermissionUpdate) {
+		permissions[accesscontrol.ActionAnnotationsRead] = dashboardScopes
+	}
 
 	anonymousUser.Permissions[dashboard.OrgID] = permissions
 
@@ -363,20 +368,20 @@ func sanitizeData(data *simplejson.Json) {
 	}
 }
 
-// NewDataTimeRange declared to be able to stub this function in tests
-var NewDataTimeRange = legacydata.NewDataTimeRange
+// NewTimeRange declared to be able to stub this function in tests
+var NewTimeRange = gtime.NewTimeRange
 
 // BuildTimeSettings build time settings object using selected values if enabled and are valid or dashboard default values
-func buildTimeSettings(d *dashboards.Dashboard, reqDTO models.PublicDashboardQueryDTO, pd *models.PublicDashboard) models.TimeSettings {
-	from, to, timezone := getTimeRangeValuesOrDefault(reqDTO, d, pd.TimeSelectionEnabled)
+func buildTimeSettings(d *dashboards.Dashboard, reqDTO models.PublicDashboardQueryDTO, pd *models.PublicDashboard, panelID int64) models.TimeSettings {
+	from, to, timezone := getTimeRangeValuesOrDefault(reqDTO, d, pd.TimeSelectionEnabled, panelID)
 
-	timeRange := NewDataTimeRange(from, to)
+	timeRange := NewTimeRange(from, to)
 
 	timeFrom, _ := timeRange.ParseFrom(
-		legacydata.WithLocation(timezone),
+		gtime.WithLocation(timezone),
 	)
 	timeTo, _ := timeRange.ParseTo(
-		legacydata.WithLocation(timezone),
+		gtime.WithLocation(timezone),
 	)
 	timeToAsEpoch := timeTo.UnixMilli()
 	timeFromAsEpoch := timeFrom.UnixMilli()
@@ -389,10 +394,15 @@ func buildTimeSettings(d *dashboards.Dashboard, reqDTO models.PublicDashboardQue
 }
 
 // returns from, to and timezone from the request if the timeSelection is enabled or the dashboard default values
-func getTimeRangeValuesOrDefault(reqDTO models.PublicDashboardQueryDTO, d *dashboards.Dashboard, timeSelectionEnabled bool) (string, string, *time.Location) {
+func getTimeRangeValuesOrDefault(reqDTO models.PublicDashboardQueryDTO, d *dashboards.Dashboard, timeSelectionEnabled bool, panelID int64) (string, string, *time.Location) {
 	from := d.Data.GetPath("time", "from").MustString()
 	to := d.Data.GetPath("time", "to").MustString()
 	dashboardTimezone := d.Data.GetPath("timezone").MustString()
+
+	panelRelativeTime := getPanelRelativeTimeRange(d.Data, panelID)
+	if panelRelativeTime != "" {
+		from = panelRelativeTime
+	}
 
 	// we use the values from the request if the time selection is enabled and the values are valid
 	if timeSelectionEnabled {
@@ -415,4 +425,16 @@ func getTimeRangeValuesOrDefault(reqDTO models.PublicDashboardQueryDTO, d *dashb
 	}
 
 	return from, to, timezone
+}
+
+func getPanelRelativeTimeRange(dashboard *simplejson.Json, panelID int64) string {
+	for _, panelObj := range dashboard.Get("panels").MustArray() {
+		panel := simplejson.NewFromAny(panelObj)
+
+		if panel.Get("id").MustInt64() == panelID {
+			return panel.Get("timeFrom").MustString()
+		}
+	}
+
+	return ""
 }

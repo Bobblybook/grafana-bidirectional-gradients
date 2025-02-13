@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
-	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
 )
 
 // nameExp matches the part after the last '/' symbol
@@ -38,13 +38,13 @@ func (s *Service) newResourceMux() *http.ServeMux {
 func (s *Service) getGCEDefaultProject(rw http.ResponseWriter, req *http.Request) {
 	project, err := s.gceDefaultProjectGetter(req.Context(), resourceManagerScope)
 	if err != nil {
-		writeResponse(rw, http.StatusBadRequest, fmt.Sprintf("unexpected error %v", err))
+		writeErrorResponse(rw, http.StatusBadRequest, fmt.Sprintf("unexpected error %v", err))
 		return
 	}
 
 	encoded, err := json.Marshal(project)
 	if err != nil {
-		writeResponse(rw, http.StatusBadRequest, fmt.Sprintf("error retrieving default project %v", err))
+		writeErrorResponse(rw, http.StatusBadRequest, fmt.Sprintf("error retrieving default project %v", err))
 		return
 	}
 	writeResponseBytes(rw, http.StatusOK, encoded)
@@ -54,7 +54,7 @@ func (s *Service) handleResourceReq(subDataSource string, responseFn processResp
 	return func(rw http.ResponseWriter, req *http.Request) {
 		client, code, err := s.setRequestVariables(req, subDataSource)
 		if err != nil {
-			writeResponse(rw, code, fmt.Sprintf("unexpected error %v", err))
+			writeErrorResponse(rw, code, fmt.Sprintf("unexpected error %v", err))
 			return
 		}
 		getResources(rw, req, client, responseFn)
@@ -63,19 +63,19 @@ func (s *Service) handleResourceReq(subDataSource string, responseFn processResp
 
 func getResources(rw http.ResponseWriter, req *http.Request, cli *http.Client, responseFn processResponse) http.ResponseWriter {
 	if responseFn == nil {
-		writeResponse(rw, http.StatusInternalServerError, "responseFn should not be nil")
+		writeErrorResponse(rw, http.StatusInternalServerError, "responseFn should not be nil")
 		return rw
 	}
 
 	responses, headers, encoding, code, err := getResponses(req, cli, responseFn)
 	if err != nil {
-		writeResponse(rw, code, fmt.Sprintf("unexpected error %v", err))
+		writeErrorResponse(rw, code, fmt.Sprintf("unexpected error %v", err))
 		return rw
 	}
 
 	body, err := buildResponse(responses, encoding)
 	if err != nil {
-		writeResponse(rw, http.StatusInternalServerError, fmt.Sprintf("error formatting responose %v", err))
+		writeErrorResponse(rw, http.StatusInternalServerError, fmt.Sprintf("error formatting responose %v", err))
 		return rw
 	}
 	writeResponseBytes(rw, code, body)
@@ -199,14 +199,14 @@ func decode(encoding string, original io.ReadCloser) ([]byte, error) {
 		}
 		defer func() {
 			if err := reader.(io.ReadCloser).Close(); err != nil {
-				slog.Warn("Failed to close reader body", "err", err)
+				backend.Logger.Warn("Failed to close reader body", "err", err)
 			}
 		}()
 	case "deflate":
 		reader = flate.NewReader(original)
 		defer func() {
 			if err := reader.(io.ReadCloser).Close(); err != nil {
-				slog.Warn("Failed to close reader body", "err", err)
+				backend.Logger.Warn("Failed to close reader body", "err", err)
 			}
 		}()
 	case "br":
@@ -246,7 +246,7 @@ func encode(encoding string, body []byte) ([]byte, error) {
 	_, err = writer.Write(body)
 	if writeCloser, ok := writer.(io.WriteCloser); ok {
 		if err := writeCloser.Close(); err != nil {
-			slog.Warn("Failed to close writer body", "err", err)
+			backend.Logger.Warn("Failed to close writer body", "err", err)
 		}
 	}
 	if err != nil {
@@ -284,7 +284,7 @@ func doRequest(req *http.Request, cli *http.Client, responseFn processResponse) 
 	}
 	defer func() {
 		if err := res.Body.Close(); err != nil {
-			slog.Warn("Failed to close response body", "err", err)
+			backend.Logger.Warn("Failed to close response body", "err", err)
 		}
 	}()
 	encoding := res.Header.Get("Content-Encoding")
@@ -346,7 +346,7 @@ func buildResponse(responses []json.RawMessage, encoding string) ([]byte, error)
 }
 
 func (s *Service) setRequestVariables(req *http.Request, subDataSource string) (*http.Client, int, error) {
-	slog.Debug("Received resource call", "url", req.URL.String(), "method", req.Method)
+	s.logger.Debug("Received resource call", "url", req.URL.String(), "method", req.Method)
 
 	newPath, err := getTarget(req.URL.Path)
 	if err != nil {
@@ -386,17 +386,21 @@ func writeResponseBytes(rw http.ResponseWriter, code int, msg []byte) {
 	rw.WriteHeader(code)
 	_, err := rw.Write(msg)
 	if err != nil {
-		slog.Error("Unable to write HTTP response", "error", err)
+		backend.Logger.Error("Unable to write HTTP response", "error", err, "statusSource", backend.ErrorSourceDownstream)
 	}
 }
 
-func writeResponse(rw http.ResponseWriter, code int, msg string) {
-	writeResponseBytes(rw, code, []byte(msg))
+func writeErrorResponse(rw http.ResponseWriter, code int, msg string) {
+	errorBody := map[string]string{
+		"error": msg,
+	}
+	json, _ := json.Marshal(errorBody)
+	writeResponseBytes(rw, code, json)
 }
 
 func (s *Service) getDataSourceFromHTTPReq(req *http.Request) (*datasourceInfo, error) {
 	ctx := req.Context()
-	pluginContext := httpadapter.PluginConfigFromContext(ctx)
+	pluginContext := backend.PluginConfigFromContext(ctx)
 	i, err := s.im.Get(ctx, pluginContext)
 	if err != nil {
 		return nil, nil

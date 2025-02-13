@@ -13,6 +13,7 @@ import (
 )
 
 func TestTimeSeriesQuery(t *testing.T) {
+	service := &Service{}
 	t.Run("multiple point descriptor is returned", func(t *testing.T) {
 		data, err := loadTestFile("./test-data/8-series-response-mql-multiple-point-descriptors.json")
 		require.NoError(t, err)
@@ -33,7 +34,7 @@ func TestTimeSeriesQuery(t *testing.T) {
 					To:   fromStart.Add(34 * time.Minute),
 				},
 			}
-			err = query.parseResponse(res, data, "")
+			err = query.parseResponse(res, data, "", service.logger)
 			frames := res.Frames
 			assert.Equal(t, "grafana-prod asia-northeast1-c 6724404429462225363 200", frames[0].Fields[1].Name)
 			assert.Equal(t, 843302441.9, frames[0].Fields[1].At(0))
@@ -52,7 +53,7 @@ func TestTimeSeriesQuery(t *testing.T) {
 					To:   fromStart.Add(34 * time.Minute),
 				},
 			}
-			err = query.parseResponse(res, data, "")
+			err = query.parseResponse(res, data, "", service.logger)
 			frames := res.Frames
 			assert.Equal(t, "test-proj - asia-northeast1-c - 6724404429462225363 - 200", frames[0].Fields[1].Name)
 		})
@@ -79,7 +80,7 @@ func TestTimeSeriesQuery(t *testing.T) {
 					To:   fromStart.Add(34 * time.Minute),
 				},
 			}
-			err = query.parseResponse(res, data, "")
+			err = query.parseResponse(res, data, "", service.logger)
 			require.NoError(t, err)
 			frames := res.Frames
 			assert.Equal(t, 1, len(res.Frames))
@@ -103,7 +104,7 @@ func TestTimeSeriesQuery(t *testing.T) {
 				To:   fromStart.Add(34 * time.Minute),
 			},
 		}
-		err = query.parseResponse(res, data, "")
+		err = query.parseResponse(res, data, "", service.logger)
 		require.NoError(t, err)
 		frames := res.Frames
 		custom, ok := frames[0].Meta.Custom.(map[string]any)
@@ -124,14 +125,14 @@ func TestTimeSeriesQuery(t *testing.T) {
 			parameters: &dataquery.TimeSeriesQuery{
 				ProjectName: "test-proj",
 				Query:       "test-query",
-				GraphPeriod: strPtr("60s"),
+				GraphPeriod: "60s",
 			},
 			timeRange: backend.TimeRange{
 				From: fromStart,
 				To:   fromStart.Add(34 * time.Minute),
 			},
 		}
-		err = query.parseResponse(res, data, "")
+		err = query.parseResponse(res, data, "", service.logger)
 		require.NoError(t, err)
 		frames := res.Frames
 		timeField := frames[0].Fields[0]
@@ -144,7 +145,29 @@ func TestTimeSeriesQuery(t *testing.T) {
 	})
 
 	t.Run("skips graph_period if disabled", func(t *testing.T) {
-		query := &cloudMonitoringTimeSeriesQuery{parameters: &dataquery.TimeSeriesQuery{GraphPeriod: strPtr("disabled")}}
+		query := &cloudMonitoringTimeSeriesQuery{parameters: &dataquery.TimeSeriesQuery{GraphPeriod: "disabled"}}
 		assert.Equal(t, query.appendGraphPeriod(&backend.QueryDataRequest{Queries: []backend.DataQuery{{}}}), "")
+	})
+
+	t.Run("time field is appropriately named", func(t *testing.T) {
+		res := &backend.DataResponse{}
+		data, err := loadTestFile("./test-data/7-series-response-mql.json")
+		require.NoError(t, err)
+		fromStart := time.Date(2018, 3, 15, 13, 0, 0, 0, time.UTC).In(time.Local)
+		query := &cloudMonitoringTimeSeriesQuery{
+			parameters: &dataquery.TimeSeriesQuery{
+				ProjectName: "test-proj",
+				Query:       "test-query",
+			},
+			aliasBy: "",
+			timeRange: backend.TimeRange{
+				From: fromStart,
+				To:   fromStart.Add(34 * time.Minute),
+			},
+		}
+		err = query.parseResponse(res, data, "", service.logger)
+		require.NoError(t, err)
+		frames := res.Frames
+		assert.Equal(t, gdata.TimeSeriesTimeFieldName, frames[0].Fields[0].Name)
 	})
 }

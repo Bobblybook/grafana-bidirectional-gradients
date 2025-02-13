@@ -1,5 +1,4 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
 import {
   DataQueryResponse,
@@ -11,7 +10,7 @@ import {
   SplitOpen,
   SupplementaryQueryType,
 } from '@grafana/data';
-import { config, reportInteraction } from '@grafana/runtime';
+import { reportInteraction } from '@grafana/runtime';
 import { DataQuery, TimeZone } from '@grafana/schema';
 import { Button, Collapse, Icon, Tooltip, useStyles2 } from '@grafana/ui';
 import store from 'app/core/store';
@@ -45,6 +44,9 @@ export function LogsSamplePanel(props: Props) {
   };
 
   const OpenInSplitViewButton = () => {
+    if (!datasourceInstance) {
+      return null;
+    }
     if (!hasSupplementaryQuerySupport(datasourceInstance, SupplementaryQueryType.LogsSample)) {
       return null;
     }
@@ -99,6 +101,7 @@ export function LogsSamplePanel(props: Props) {
             prettifyLogMessage={store.getBool(SETTINGS_KEYS.prettifyLogMessage, false)}
             timeZone={timeZone}
             enableLogDetails={true}
+            scrollElement={null}
           />
         </div>
       </>
@@ -107,7 +110,6 @@ export function LogsSamplePanel(props: Props) {
 
   return queryResponse?.state !== LoadingState.NotStarted ? (
     <Collapse
-      className={styles.logsSamplePanel}
       label={
         <div>
           Logs sample
@@ -126,24 +128,17 @@ export function LogsSamplePanel(props: Props) {
 }
 
 const getStyles = (theme: GrafanaTheme2) => {
-  const scrollableLogsContainer = config.featureToggles.exploreScrollableLogsContainer;
-
   return {
-    logsSamplePanel: css`
-      ${scrollableLogsContainer && 'max-height: calc(100vh - 115px);'}
-    `,
-    logSamplesButton: css`
-      position: absolute;
-      top: ${theme.spacing(1)};
-      right: ${theme.spacing(1)};
-    `,
-    logContainer: css`
-      ${scrollableLogsContainer && 'position: relative;'}
-      ${scrollableLogsContainer && 'height: 100%;'}
-      overflow: scroll;
-    `,
-    infoTooltip: css`
-      margin-left: ${theme.spacing(1)};
-    `,
+    logSamplesButton: css({
+      position: 'absolute',
+      top: theme.spacing(1),
+      right: theme.spacing(1),
+    }),
+    logContainer: css({
+      overflow: 'scroll',
+    }),
+    infoTooltip: css({
+      marginLeft: theme.spacing(1),
+    }),
   };
 };
